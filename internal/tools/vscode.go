@@ -30,7 +30,7 @@ VS Code Remote Development Ready!
 
 1. Install the "Remote - SSH" extension in VS Code
 
-2. Add to your ~/.ssh/config:
+2. Add to ~/.ssh/config:
 
   Host sprite-%s
       HostName localhost
@@ -45,9 +45,9 @@ VS Code Remote Development Ready!
    - Type "Remote-SSH: Connect to Host"
    - Select "sprite-%s"
 
-Or use the command palette with:
-  ssh -i %s -p %d sprite@localhost
-`, opts.SpriteName, opts.LocalPort, opts.KeyPath, opts.SpriteName, opts.KeyPath, opts.LocalPort)
+Or connect via SSH with:
+  ssh sprite-%s
+`, opts.SpriteName, opts.LocalPort, opts.KeyPath, opts.SpriteName, opts.SpriteName)
 }
 
 func (v *VSCode) Validate(ctx context.Context) error {

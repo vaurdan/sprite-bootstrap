@@ -28,13 +28,7 @@ func (z *Zed) Instructions(opts SetupOptions) string {
 	return fmt.Sprintf(`
 Zed Remote Development Ready!
 
-In Zed, use "Open Remote Project" (Cmd+Shift+P -> "remote") with:
-  ssh://sprite@localhost:%d/home/sprite
-
-Or connect via SSH with:
-  ssh -i %s -p %d sprite@localhost
-
-Recommended: Add to ~/.ssh/config:
+Add to ~/.ssh/config:
 
   Host sprite-%s
       HostName localhost
@@ -44,8 +38,12 @@ Recommended: Add to ~/.ssh/config:
       StrictHostKeyChecking no
       UserKnownHostsFile /dev/null
 
-Then in Zed use: ssh://sprite-%s/home/sprite
-`, opts.LocalPort, opts.KeyPath, opts.LocalPort, opts.SpriteName, opts.LocalPort, opts.KeyPath, opts.SpriteName)
+Then in Zed use "Open Remote Project" with:
+  ssh://sprite-%s/home/sprite
+
+Or connect via SSH with:
+  ssh sprite-%s
+`, opts.SpriteName, opts.LocalPort, opts.KeyPath, opts.SpriteName, opts.SpriteName)
 }
 
 func (z *Zed) Validate(ctx context.Context) error {

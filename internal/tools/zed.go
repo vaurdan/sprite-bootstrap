@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 )
 
 func init() {
@@ -28,12 +27,18 @@ var zedBinaryNames = []string{"zed", "zeditor", "zedit", "zed-editor"}
 
 // findZedBinary finds the Zed binary, checking:
 // 1. ZED_PATH environment variable
-// 2. Direct binary lookup in PATH
-// 3. Shell alias resolution
+// 2. Platform-specific locations (Windows registry, common paths)
+// 3. Direct binary lookup in PATH
+// 4. Shell alias resolution (Unix only)
 func findZedBinary() (string, bool) {
 	// Check environment variable first
 	if zedPath := os.Getenv("ZED_PATH"); zedPath != "" {
 		return zedPath, false // false = don't use shell
+	}
+
+	// Check platform-specific locations
+	if path := findZedPlatformSpecific(); path != "" {
+		return path, false
 	}
 
 	// Try direct binary lookup
@@ -43,46 +48,17 @@ func findZedBinary() (string, bool) {
 		}
 	}
 
-	// Try to resolve via shell (for aliases)
-	for _, name := range zedBinaryNames {
-		if shellHasCommand(name) {
-			return name, true // true = use shell
-		}
+	// Try platform-specific fallback (shell aliases on Unix)
+	if name, useShell := findZedFallback(); name != "" {
+		return name, useShell
 	}
 
 	return "", false
 }
 
-// shellHasCommand checks if a command exists in the shell (including aliases)
-func shellHasCommand(name string) bool {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		if runtime.GOOS == "windows" {
-			return false
-		}
-		shell = "/bin/sh"
-	}
-
-	// Use 'command -v' which works for aliases, functions, and binaries
-	cmd := exec.Command(shell, "-i", "-c", fmt.Sprintf("command -v %s", name))
-	return cmd.Run() == nil
-}
-
 // launchZed launches Zed with the given URL
 func launchZed(zedCmd string, useShell bool, url string) error {
-	var cmd *exec.Cmd
-
-	if useShell {
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
-		}
-		// Use interactive shell to load aliases
-		cmd = exec.Command(shell, "-i", "-c", fmt.Sprintf("%s %q", zedCmd, url))
-	} else {
-		cmd = exec.Command(zedCmd, url)
-	}
-
+	cmd := buildZedCommand(zedCmd, useShell, url)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

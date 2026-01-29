@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 
 	"sprite-bootstrap/internal/config"
@@ -115,9 +114,7 @@ func StartServe(port int) error {
 	}
 
 	cmd := exec.Command(executable, "serve", "-l", fmt.Sprintf(":%d", port))
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	setSysProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start serve: %w", err)
@@ -161,13 +158,7 @@ func StopServe() error {
 		return fmt.Errorf("invalid PID: %w", err)
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		os.Remove(pidFile)
-		return nil
-	}
-
-	if err := process.Signal(syscall.SIGTERM); err != nil {
+	if err := signalTerminate(pid); err != nil {
 		os.Remove(pidFile)
 		return nil
 	}
@@ -190,12 +181,7 @@ func IsServeRunning() bool {
 		return false
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	return process.Signal(syscall.Signal(0)) == nil
+	return isProcessRunning(pid)
 }
 
 // GetServePid returns the PID of the running serve, or 0 if not running
@@ -212,12 +198,7 @@ func GetServePid() int {
 		return 0
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return 0
-	}
-
-	if process.Signal(syscall.Signal(0)) != nil {
+	if !isProcessRunning(pid) {
 		return 0
 	}
 

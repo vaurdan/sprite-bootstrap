@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -11,6 +12,9 @@ import (
 	"time"
 
 	"sprite-bootstrap/internal/config"
+	"sprite-bootstrap/internal/sshserver"
+
+	"github.com/superfly/sprites-go"
 )
 
 // registry holds all registered tools
@@ -50,6 +54,13 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 
 	fmt.Printf("Setting up %s remote development...\n", tool.Name())
 
+	// Wake up the sprite first (it might be in warm/sleep state)
+	fmt.Printf("Waking up sprite %s...\n", opts.SpriteName)
+	if err := wakeSprite(ctx, opts); err != nil {
+		return fmt.Errorf("failed to wake sprite: %w", err)
+	}
+	fmt.Println("Sprite is ready")
+
 	// Ensure serve is running
 	if !IsServeRunning() {
 		fmt.Println("Starting SSH server...")
@@ -68,6 +79,41 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 
 	// Print instructions
 	fmt.Println(tool.Instructions(opts))
+
+	return nil
+}
+
+// wakeSprite sends a simple command to wake up a sprite from warm/sleep state
+func wakeSprite(ctx context.Context, opts SetupOptions) error {
+	// Resolve token from sprites config
+	tokenOpts := &sshserver.TokenOptions{
+		Organization: opts.OrgName,
+	}
+	if err := tokenOpts.Resolve(); err != nil {
+		return fmt.Errorf("failed to resolve sprites credentials: %w\nRun 'sprite login' first", err)
+	}
+
+	// Create sprites client
+	client := sprites.New(tokenOpts.AuthToken, sprites.WithBaseURL(tokenOpts.API))
+
+	// Get the sprite
+	sprite, err := client.GetSprite(ctx, opts.SpriteName)
+	if err != nil {
+		return fmt.Errorf("sprite not found: %s", opts.SpriteName)
+	}
+
+	// Run a simple command to wake it up
+	// Using 'true' as it's the simplest command that does nothing but succeed
+	wakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	cmd := sprite.CommandContext(wakeCtx, "true")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to wake sprite: %w", err)
+	}
 
 	return nil
 }

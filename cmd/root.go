@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"sprite-bootstrap/internal/sprite"
 	"sprite-bootstrap/internal/tools"
 
 	"github.com/spf13/cobra"
@@ -22,10 +21,8 @@ var rootCmd = &cobra.Command{
 	Long: `sprite-bootstrap is a cross-platform CLI utility that configures Sprite
 environments for IDE remote development via SSH.
 
-It handles:
-  - SSH key generation and deployment
-  - Sprite proxy management
-  - IDE-specific configuration`,
+It runs a local SSH server that proxies connections to sprites.
+Connect using: ssh <sprite-name>@localhost -p <port>`,
 }
 
 func init() {
@@ -46,10 +43,6 @@ func makeToolCommand(tool tools.Tool) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if spriteName == "" {
 				return fmt.Errorf("sprite name required (-s)")
-			}
-
-			if err := sprite.CheckSpriteInstalled(); err != nil {
-				return err
 			}
 
 			ctx := context.Background()

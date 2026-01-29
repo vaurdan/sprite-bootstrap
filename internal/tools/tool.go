@@ -25,5 +25,4 @@ type SetupOptions struct {
 	SpriteName string
 	OrgName    string
 	LocalPort  int
-	KeyPath    string
 }

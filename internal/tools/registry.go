@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"sprite-bootstrap/internal/config"
-	"sprite-bootstrap/internal/sprite"
-	"sprite-bootstrap/internal/ssh"
 )
 
 // registry holds all registered tools
@@ -39,8 +42,6 @@ func Names() []string {
 
 // Bootstrap performs the common bootstrap sequence for any tool
 func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
-	client := sprite.NewClient(opts.SpriteName, opts.OrgName)
-
 	// Validate prerequisites
 	if err := tool.Validate(ctx); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
@@ -48,43 +49,23 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 
 	fmt.Printf("Setting up %s remote development...\n", tool.Name())
 
-	// 1. Generate/ensure SSH key exists
-	fmt.Printf("Ensuring SSH key at %s...\n", opts.KeyPath)
-	publicKey, err := ssh.EnsureKey(opts.KeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to setup SSH key: %w", err)
+	// Ensure serve is running
+	if !IsServeRunning() {
+		fmt.Println("Starting SSH server...")
+		if err := StartServe(opts.LocalPort); err != nil {
+			return fmt.Errorf("failed to start SSH server: %w", err)
+		}
+		fmt.Printf("SSH server started on port %d\n", opts.LocalPort)
+	} else {
+		fmt.Printf("SSH server already running on port %d\n", opts.LocalPort)
 	}
 
-	// 2. Setup SSH on sprite (add key, fix permissions)
-	fmt.Println("Configuring SSH on sprite...")
-	if err := client.SetupSSH(ctx, publicKey); err != nil {
-		return fmt.Errorf("failed to setup SSH on sprite: %w", err)
-	}
-
-	// 3. Fix .bashrc for non-interactive sessions
-	fmt.Println("Fixing .bashrc for non-interactive sessions...")
-	if err := client.FixBashrc(ctx); err != nil {
-		return fmt.Errorf("failed to fix .bashrc: %w", err)
-	}
-
-	// 4. Ensure sshd is running
-	fmt.Println("Ensuring SSH daemon is running...")
-	if err := client.EnsureSSHD(ctx); err != nil {
-		return fmt.Errorf("failed to ensure sshd: %w", err)
-	}
-
-	// 5. Tool-specific setup
+	// Tool-specific setup
 	if err := tool.Setup(ctx, opts); err != nil {
 		return fmt.Errorf("failed tool setup: %w", err)
 	}
 
-	// 6. Start proxy
-	fmt.Printf("Starting proxy on localhost:%d...\n", opts.LocalPort)
-	if err := sprite.StartProxy(opts.SpriteName, opts.OrgName, opts.LocalPort, 22); err != nil {
-		return fmt.Errorf("failed to start proxy: %w", err)
-	}
-
-	// 7. Print instructions
+	// Print instructions
 	fmt.Println(tool.Instructions(opts))
 
 	return nil
@@ -96,6 +77,123 @@ func NewSetupOptions(spriteName, orgName string, localPort int) SetupOptions {
 		SpriteName: spriteName,
 		OrgName:    orgName,
 		LocalPort:  localPort,
-		KeyPath:    config.KeyPath(spriteName),
 	}
+}
+
+// ServePidFile returns the path to the serve PID file
+func ServePidFile() string {
+	return filepath.Join(config.StateDir(), "serve.pid")
+}
+
+// StartServe starts the serve command in the background
+func StartServe(port int) error {
+	if err := config.EnsureStateDir(); err != nil {
+		return err
+	}
+
+	// Get the path to ourselves
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	cmd := exec.Command(executable, "serve", "-l", fmt.Sprintf(":%d", port))
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start serve: %w", err)
+	}
+
+	// Save PID
+	pidFile := ServePidFile()
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to save PID: %w", err)
+	}
+
+	cmd.Process.Release()
+	return nil
+}
+
+// StopServe stops the running serve process
+func StopServe() error {
+	pidFile := ServePidFile()
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read PID file: %w", err)
+	}
+
+	pid, err := strconv.Atoi(string(data))
+	if err != nil {
+		os.Remove(pidFile)
+		return fmt.Errorf("invalid PID: %w", err)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		os.Remove(pidFile)
+		return nil
+	}
+
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		os.Remove(pidFile)
+		return nil
+	}
+
+	os.Remove(pidFile)
+	return nil
+}
+
+// IsServeRunning checks if serve is running
+func IsServeRunning() bool {
+	pidFile := ServePidFile()
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return false
+	}
+
+	pid, err := strconv.Atoi(string(data))
+	if err != nil {
+		return false
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// GetServePid returns the PID of the running serve, or 0 if not running
+func GetServePid() int {
+	pidFile := ServePidFile()
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0
+	}
+
+	pid, err := strconv.Atoi(string(data))
+	if err != nil {
+		return 0
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return 0
+	}
+
+	if process.Signal(syscall.Signal(0)) != nil {
+		return 0
+	}
+
+	return pid
 }

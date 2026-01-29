@@ -3,19 +3,16 @@ package cmd
 import (
 	"fmt"
 
-	"sprite-bootstrap/internal/sprite"
+	"sprite-bootstrap/internal/tools"
 
 	"github.com/spf13/cobra"
 )
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the proxy for a sprite",
-	Long: `Stop the running sprite proxy.
-
-This will terminate the SSH tunnel but does not remove SSH keys
-or configuration from the sprite.`,
-	RunE: runStop,
+	Short: "Stop the SSH server",
+	Long:  `Stop the running SSH server.`,
+	RunE:  runStop,
 }
 
 func init() {
@@ -23,22 +20,18 @@ func init() {
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
-	if spriteName == "" {
-		return fmt.Errorf("sprite name required (-s)")
-	}
-
-	if !sprite.IsProxyRunning(spriteName) {
-		fmt.Printf("No proxy running for sprite: %s\n", spriteName)
+	if !tools.IsServeRunning() {
+		fmt.Println("SSH server is not running")
 		return nil
 	}
 
-	pid := sprite.GetProxyPid(spriteName)
-	fmt.Printf("Stopping proxy (PID %d) for sprite: %s...\n", pid, spriteName)
+	pid := tools.GetServePid()
+	fmt.Printf("Stopping SSH server (PID %d)...\n", pid)
 
-	if err := sprite.StopProxy(spriteName); err != nil {
-		return fmt.Errorf("failed to stop proxy: %w", err)
+	if err := tools.StopServe(); err != nil {
+		return fmt.Errorf("failed to stop server: %w", err)
 	}
 
-	fmt.Println("Proxy stopped.")
+	fmt.Println("Server stopped.")
 	return nil
 }

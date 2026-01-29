@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"sprite-bootstrap/internal/config"
 )
@@ -85,8 +87,23 @@ func ServePidFile() string {
 	return filepath.Join(config.StateDir(), "serve.pid")
 }
 
+// isPortAvailable checks if a port is available for binding
+func isPortAvailable(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
 // StartServe starts the serve command in the background
 func StartServe(port int) error {
+	// Check if port is available
+	if !isPortAvailable(port) {
+		return fmt.Errorf("port %d is already in use by another service\nTry a different port with -p flag, e.g.: sprite-bootstrap zed -s mysprite -p 2223", port)
+	}
+
 	if err := config.EnsureStateDir(); err != nil {
 		return err
 	}
@@ -114,7 +131,16 @@ func StartServe(port int) error {
 	}
 
 	cmd.Process.Release()
-	return nil
+
+	// Wait for server to be ready (port to be bound)
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if !isPortAvailable(port) {
+			return nil // Server is now listening
+		}
+	}
+
+	return fmt.Errorf("server started but failed to bind to port %d", port)
 }
 
 // StopServe stops the running serve process

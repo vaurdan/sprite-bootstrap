@@ -78,7 +78,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	listener, err := sshserver.Bind(bindCtx, listenAddr)
 	if err != nil {
-		return fmt.Errorf("failed to bind to %s: %w", listenAddr, err)
+		return fmt.Errorf("failed to bind to %s: %w\n\nIs another service using this port? Try a different port with -l flag", listenAddr, err)
 	}
 
 	fmt.Printf("SSH server listening on %s\n", listener.Addr().String())

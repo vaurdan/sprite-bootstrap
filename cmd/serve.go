@@ -19,8 +19,9 @@ var (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Run the SSH server for sprites",
+	Use:    "serve",
+	Short:  "Run the SSH server for sprites",
+	Hidden: true, // Auto-started by zed/vscode commands
 	Long: `Run a local SSH server that proxies connections to sprites.
 
 Connect using: ssh <sprite-name>@localhost -p <port>

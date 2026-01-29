@@ -5,9 +5,9 @@ A cross-platform CLI utility that bootstraps Sprite environments for IDE remote 
 ## Features
 
 - **Cross-platform**: Works on Linux, macOS, and Windows
+- **No sshd required**: Uses the sprites API directly, no need to install SSH server on sprites
 - **Multiple IDEs**: Supports Zed, VS Code, and easily extensible for more
-- **Secure**: Generates per-sprite SSH keys with proper permissions
-- **Simple**: Single command to set up remote development
+- **Simple**: Single server handles all sprites
 
 ## Installation
 
@@ -35,17 +35,31 @@ GOOS=windows GOARCH=amd64 go build -o dist/sprite-bootstrap-windows-amd64.exe
 
 ## Usage
 
-### Bootstrap for Zed
+### Start the SSH Server
 
 ```bash
-sprite-bootstrap zed -s mysprite -o myorg
+sprite-bootstrap serve -l :2222
 ```
 
-### Bootstrap for VS Code
+This starts a local SSH server that proxies connections to any sprite. Connect using the sprite name as the SSH username:
 
 ```bash
-sprite-bootstrap vscode -s mysprite -o myorg
+ssh mysprite@localhost -p 2222
 ```
+
+### IDE-Specific Setup
+
+For IDE-specific configuration and instructions:
+
+```bash
+# Zed
+sprite-bootstrap zed -s mysprite
+
+# VS Code
+sprite-bootstrap vscode -s mysprite
+```
+
+These commands configure SSH and provide connection instructions for each IDE.
 
 ### Check Status
 
@@ -59,37 +73,36 @@ sprite-bootstrap status -s mysprite
 sprite-bootstrap stop -s mysprite
 ```
 
+## Architecture
+
+```
+Local Machine                              Sprite API
+┌────────────────────────┐
+│  sprite-bootstrap      │
+│  serve -l :2222        │
+│                        │    websocket
+│  ssh server ───────────│─────────────────▶ sprites API
+│                        │                        │
+│  ssh mysprite@localhost│                        ▼
+│      └── username =    │                   sprite exec
+│          sprite name   │
+└────────────────────────┘
+```
+
+**Benefits over traditional SSH:**
+- No sshd installation needed on sprites
+- No per-sprite proxy processes
+- Single server handles all sprites
+- Sprite name = SSH username
+
 ## Flags
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--sprite` | `-s` | Sprite name | (required) |
+| `--listen` | `-l` | Address to listen on (serve) | :2222 |
+| `--sprite` | `-s` | Sprite name | (required for zed/vscode) |
 | `--org` | `-o` | Organization | (optional) |
-| `--port` | `-p` | Local SSH port | 2222 |
 | `--help` | `-h` | Show help | |
-
-## How It Works
-
-1. **SSH Key Generation**: Creates an ed25519 SSH key pair stored in `~/.sprite-bootstrap/keys/`
-2. **Sprite Configuration**: Deploys the public key to the sprite's authorized_keys
-3. **Bashrc Fix**: Adds an interactive check to prevent shell issues with IDEs
-4. **Proxy Start**: Launches `sprite proxy` to tunnel SSH traffic
-5. **Instructions**: Displays IDE-specific connection instructions
-
-## Architecture
-
-```
-Local Machine                          Sprite VM
-┌─────────────────────┐               ┌─────────────────────┐
-│ sprite-bootstrap    │               │                     │
-│                     │  sprite exec  │  - sshd (port 22)   │
-│ ~/.sprite-bootstrap/│──────────────▶│  - authorized_keys  │
-│   keys/sprite-key   │               │  - .bashrc fix      │
-│                     │               │                     │
-│ sprite proxy        │               │                     │
-│ localhost:2222 ─────│──────────────▶│:22                  │
-└─────────────────────┘               └─────────────────────┘
-```
 
 ## Adding New IDE Support
 
@@ -118,8 +131,8 @@ func (c *Cursor) Instructions(opts SetupOptions) string {
     return fmt.Sprintf(`
 Cursor Remote Development Ready!
 
-Connect via: ssh -i %s -p %d sprite@localhost
-`, opts.KeyPath, opts.LocalPort)
+Connect via: ssh %s@localhost -p %d
+`, opts.SpriteName, opts.LocalPort)
 }
 ```
 
@@ -128,8 +141,11 @@ That's it - the command is automatically registered.
 ## Requirements
 
 - Go 1.21+
-- `sprite` CLI installed and in PATH
-- SSH daemon available on the sprite
+- `sprite` CLI credentials (run `sprite login` first)
+
+## Acknowledgments
+
+The SSH server implementation is based on [spritessh](https://github.com/jbellerb/spritessh) by jae beller, licensed under the MIT License.
 
 ## License
 

@@ -676,11 +676,12 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
-	// Run command directly via sprites SDK, matching how sprite CLI does it
+	// Run command directly via sprites SDK
 	var cmd *sprites.Cmd
 	if command == "" || command == "/.sprite/bin/sprite-console" {
-		// Interactive shell - run sprite-console directly
-		cmd = s.sprite.CommandContext(ctx, "/.sprite/bin/sprite-console")
+		// Interactive login shell with explicit -i for proper prompt
+		// We bypass sprite-console because Zed's SSH doesn't pass env vars reliably
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-li")
 	} else {
 		// Execute command via bash for proper shell expansion
 		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)

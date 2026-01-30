@@ -270,6 +270,78 @@ func isClaudeCodeInstalledOnRemote(ctx context.Context, sprite *sprites.Sprite) 
 	return strings.TrimSpace(string(output)) != ""
 }
 
+// installClaudeCodeOnRemote downloads and installs the Claude Code extension on the sprite
+func installClaudeCodeOnRemote(ctx context.Context, sprite *sprites.Sprite) error {
+	if sprite == nil {
+		return fmt.Errorf("sprite is nil")
+	}
+
+	installCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	// Download VSIX from VS Code marketplace and extract to extensions directory
+	// The VSIX is a zip file that needs to be extracted to ~/.vscode-server/extensions/
+	script := `
+set -e
+PUBLISHER="anthropic"
+EXTENSION="claude-code"
+EXT_DIR="$HOME/.vscode-server/extensions"
+
+# Create extensions directory if needed
+mkdir -p "$EXT_DIR"
+
+# Get latest version from marketplace API
+VERSION=$(curl -sf "https://marketplace.visualstudio.com/items?itemName=${PUBLISHER}.${EXTENSION}" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1)
+if [ -z "$VERSION" ]; then
+    # Fallback: try to get from Open VSX
+    VERSION=$(curl -sf "https://open-vsx.org/api/${PUBLISHER}/${EXTENSION}" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1)
+fi
+if [ -z "$VERSION" ]; then
+    echo "Could not determine extension version"
+    exit 1
+fi
+
+echo "Installing ${PUBLISHER}.${EXTENSION} version ${VERSION}..."
+
+# Check if already installed
+if [ -d "$EXT_DIR/${PUBLISHER}.${EXTENSION}-${VERSION}" ]; then
+    echo "Already installed"
+    exit 0
+fi
+
+# Download VSIX from marketplace
+VSIX_URL="https://${PUBLISHER}.gallery.vsassets.io/_apis/public/gallery/publisher/${PUBLISHER}/extension/${EXTENSION}/${VERSION}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR"
+
+echo "Downloading from marketplace..."
+if ! curl -sfL "$VSIX_URL" -o extension.vsix; then
+    # Fallback to Open VSX
+    echo "Trying Open VSX..."
+    VSIX_URL="https://open-vsx.org/api/${PUBLISHER}/${EXTENSION}/${VERSION}/file/${PUBLISHER}.${EXTENSION}-${VERSION}.vsix"
+    curl -sfL "$VSIX_URL" -o extension.vsix
+fi
+
+# Extract VSIX (it's a zip file)
+unzip -q extension.vsix -d extracted
+
+# Move extension to VS Code extensions directory
+mv extracted/extension "$EXT_DIR/${PUBLISHER}.${EXTENSION}-${VERSION}"
+
+# Cleanup
+cd /
+rm -rf "$TMP_DIR"
+
+echo "Installed successfully"
+`
+
+	cmd := sprite.CommandContext(installCtx, "/bin/bash", "-c", script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
 // promptInstallClaudeCode asks the user if they want to install Claude Code extension
 // Returns: true = install, false = don't install
 func promptInstallClaudeCode() bool {
@@ -336,36 +408,31 @@ func (v *VSCode) Instructions(opts SetupOptions) string {
 	binary := findVSCodeBinary()
 	if binary != "" {
 		// Check if Claude Code extension is already installed on remote
-		installClaudeCode := false
 		if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
 			// Not installed - ask user if they want to install it
-			installClaudeCode = promptInstallClaudeCode()
+			if promptInstallClaudeCode() {
+				fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
+				if err := installClaudeCodeOnRemote(ctx, opts.Sprite); err != nil {
+					fmt.Printf("%s⚠%s Failed to install: %v\n", ColorYellow, ColorReset, err)
+					fmt.Printf("   You can install it manually in VS Code Extensions\n")
+				} else {
+					fmt.Printf("%s✓%s Claude Code extension installed\n", ColorGreen, ColorReset)
+				}
+			}
 		}
 
 		// Launch VS Code
 		if err := launchVSCode(binary, opts); err == nil {
-			msg := fmt.Sprintf(`
+			return fmt.Sprintf(`
 %s%s✓ VS Code Remote Development Ready!%s
 
 %sOpening:%s %s:%s
-`, ColorBold, ColorGreen, ColorReset,
-				ColorCyan, ColorReset, hostName, opts.RemotePath)
 
-			if installClaudeCode {
-				msg += fmt.Sprintf(`
-%sTo install Claude Code:%s
-  1. Wait for VS Code to connect to the remote
-  2. Open Extensions (Cmd+Shift+X / Ctrl+Shift+X)
-  3. Search for "Claude Code" and click Install
-`, ColorYellow, ColorReset)
-			}
-
-			msg += fmt.Sprintf(`
 If VS Code doesn't connect, try manually:
   %scode --remote ssh-remote+%s %s%s
-`, ColorYellow, hostName, opts.RemotePath, ColorReset)
-
-			return msg
+`, ColorBold, ColorGreen, ColorReset,
+				ColorCyan, ColorReset, hostName, opts.RemotePath,
+				ColorYellow, hostName, opts.RemotePath, ColorReset)
 		}
 	}
 

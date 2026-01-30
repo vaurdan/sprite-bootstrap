@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
+
+	"sprite-bootstrap/internal/sshserver"
+
+	"github.com/superfly/sprites-go"
 )
 
 func init() {
@@ -67,7 +72,40 @@ func launchZed(zedCmd string, useShell bool, url string) error {
 }
 
 func (z *Zed) Setup(ctx context.Context, opts SetupOptions) error {
+	// Clean up stale Zed state before connecting
+	// This prevents "starting proxy" hangs caused by stale Unix sockets
+	cleanupStaleZedState(ctx, opts)
 	return nil
+}
+
+// cleanupStaleZedState removes stale Zed remote server state from the sprite
+// This prevents connection hangs when Zed tries to connect to dead sockets
+func cleanupStaleZedState(ctx context.Context, opts SetupOptions) {
+	// Resolve credentials
+	tokenOpts := &sshserver.TokenOptions{
+		Organization: opts.OrgName,
+	}
+	if err := tokenOpts.Resolve(); err != nil {
+		return // Non-fatal
+	}
+
+	// Connect to sprite
+	client := sprites.New(tokenOpts.AuthToken, sprites.WithBaseURL(tokenOpts.API))
+	sprite, err := client.GetSprite(ctx, opts.SpriteName)
+	if err != nil {
+		return // Non-fatal
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Remove stale server state (Unix sockets and PID files)
+	// Zed will recreate these on connect
+	cmd := sprite.CommandContext(cleanupCtx, "rm", "-rf",
+		"/home/sprite/.local/share/zed/server_state")
+	_ = cmd.Run() // Ignore errors
+
+	fmt.Printf("%s✓%s Cleaned stale Zed state\n", ColorGreen, ColorReset)
 }
 
 func (z *Zed) Instructions(opts SetupOptions) string {

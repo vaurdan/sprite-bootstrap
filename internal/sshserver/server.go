@@ -696,17 +696,33 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 		return errAlreadyRunning
 	}
 
+	// For interactive shells, allow more reconnection attempts
+	if isShell {
+		maxRetries = max(maxRetries, 10)
+	}
+
 	go func() {
-		attempt := 1
+		attempt := 0
 		for {
-			err := s.runCommand(ctx, command, isShell)
+			attempt++
+			err := s.runCommand(ctx, command, isShell, attempt)
 			if err == nil {
 				break
 			}
 
 			if shouldRetry(err) && attempt < maxRetries {
 				delay := min(1<<min(attempt, 63), int64(maxBackoffDuration))
-				attempt++
+
+				// Notify user that we're reconnecting (for interactive shells with TTY)
+				if isShell && s.tty {
+					msg := fmt.Sprintf("\r\n\033[33m[sprite] Connection lost, reconnecting (attempt %d/%d)...\033[0m\r\n", attempt+1, maxRetries)
+					s.ch.Write([]byte(msg))
+				}
+
+				slog.WarnContext(ctx, "Sprite connection lost, retrying",
+					"attempt", attempt+1,
+					"max_retries", maxRetries,
+					"error", err)
 
 				select {
 				case <-time.After(time.Duration(mrand.Int63n(delay))):
@@ -749,7 +765,7 @@ func shouldRetry(err error) bool {
 	return false
 }
 
-func (s *session) runCommand(ctx context.Context, command string, isShell bool) error {
+func (s *session) runCommand(ctx context.Context, command string, isShell bool, attempt int) error {
 	// Run command directly via sprites SDK
 	var cmd *sprites.Cmd
 	if isShell && s.tty {
@@ -781,9 +797,16 @@ func (s *session) runCommand(ctx context.Context, command string, isShell bool) 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+
+	// Show reconnected message for interactive shells after successful reconnection
+	if attempt > 1 && isShell && s.tty {
+		s.ch.Write([]byte("\033[32m[sprite] Reconnected!\033[0m\r\n"))
+	}
+
 	slog.InfoContext(ctx, "Started exec session",
 		"session.exec.tty", s.tty,
-		"session.exec.cmd", command)
+		"session.exec.cmd", command,
+		"attempt", attempt)
 
 	var exit *sprites.ExitError
 	if err := cmd.Wait(); err != nil && !errors.As(err, &exit) {

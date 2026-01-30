@@ -37,7 +37,17 @@ var (
 	errUnsupportedReq = errors.New("unsupported request type")
 )
 
-var maxBackoffDuration = 10 * time.Second
+// Retry settings for sprite connection recovery
+var (
+	initialRetryDelay  = 500 * time.Millisecond // Start with 500ms delay
+	maxBackoffDuration = 5 * time.Second        // Cap backoff at 5 seconds
+)
+
+// SSH keepalive settings - frequent checks for faster recovery after network loss
+var (
+	keepaliveInterval = 15 * time.Second // Send keepalive every 15 seconds
+	keepaliveTimeout  = 10 * time.Second // Wait 10 seconds for response
+)
 
 // Bech32 alphabet for session IDs
 var bech32Encoding = base32.NewEncoding("qpzry9x8gf2tvdw0s3jn54khce6mua7l").
@@ -250,14 +260,20 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 		return
 	}
 
-	slog.InfoContext(ctx, "New SSH connection",
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
+	slog.InfoContext(connCtx, "New SSH connection",
 		"conn.addr", newConn.RemoteAddr().String(),
 		"conn.id", bech32Encoding.EncodeToString(newConn.SessionID()),
 		"sprite.name", sprite.Name())
 
+	// Start keepalive goroutine to detect dead connections
+	go c.keepalive(connCtx, connCancel)
+
 	for {
 		select {
-		case <-ctx.Done():
+		case <-connCtx.Done():
 			c.Close()
 			return
 		case newCh := <-chans:
@@ -267,9 +283,9 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 
 			switch newCh.ChannelType() {
 			case "session":
-				go c.handleSession(ctx, newCh, sprite)
+				go c.handleSession(connCtx, newCh, sprite)
 			case "direct-tcpip":
-				go c.handleDirectTCPIP(ctx, newCh, sprite)
+				go c.handleDirectTCPIP(connCtx, newCh, sprite)
 			default:
 				newCh.Reject(ssh.UnknownChannelType, "unknown channel type")
 			}
@@ -280,6 +296,42 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 
 			if req.WantReply {
 				req.Reply(false, nil)
+			}
+		}
+	}
+}
+
+// keepalive sends periodic keepalive requests to detect dead connections
+func (c *sshConn) keepalive(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Send keepalive request with timeout
+			done := make(chan bool, 1)
+			go func() {
+				// Request with WantReply=true to get a response
+				_, _, err := c.conn.SendRequest("keepalive@openssh.com", true, nil)
+				done <- (err == nil)
+			}()
+
+			select {
+			case ok := <-done:
+				if !ok {
+					slog.Debug("SSH keepalive failed, closing connection")
+					cancel()
+					return
+				}
+			case <-time.After(keepaliveTimeout):
+				slog.Debug("SSH keepalive timeout, closing connection")
+				cancel()
+				return
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -427,9 +479,38 @@ func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, s
 
 	slog.InfoContext(ctx, "Proxy connection established", "dest", dest, "target", response.Target)
 
+	// Set up WebSocket keepalive via ping/pong
+	wsConn.SetPongHandler(func(string) error {
+		// Extend read deadline on pong
+		wsConn.SetReadDeadline(time.Now().Add(keepaliveInterval + keepaliveTimeout))
+		return nil
+	})
+	// Set initial read deadline
+	wsConn.SetReadDeadline(time.Now().Add(keepaliveInterval + keepaliveTimeout))
+
 	// Start bidirectional copy between SSH channel and WebSocket
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3) // +1 for ping goroutine
+
+	// Ping goroutine to keep WebSocket alive
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(keepaliveInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := wsConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(keepaliveTimeout)); err != nil {
+					slog.DebugContext(ctx, "WebSocket ping failed", "exception", err)
+					wsConn.Close()
+					return
+				}
+			}
+		}
+	}()
 
 	// Copy from SSH channel to WebSocket
 	go func() {
@@ -619,20 +700,41 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 		return errAlreadyRunning
 	}
 
+	// For interactive shells, allow more reconnection attempts
+	if isShell {
+		maxRetries = max(maxRetries, 10)
+	}
+
 	go func() {
-		attempt := 1
+		attempt := 0
 		for {
-			err := s.runCommand(ctx, command, isShell)
+			attempt++
+			err := s.runCommand(ctx, command, isShell, attempt)
 			if err == nil {
 				break
 			}
 
 			if shouldRetry(err) && attempt < maxRetries {
-				delay := min(1<<min(attempt, 63), int64(maxBackoffDuration))
-				attempt++
+				// Exponential backoff: 500ms → 1s → 2s → 4s → 5s (capped)
+				delay := initialRetryDelay << min(attempt-1, 10)
+				if delay > maxBackoffDuration {
+					delay = maxBackoffDuration
+				}
+
+				// Notify user that we're reconnecting (for interactive shells with TTY)
+				if isShell && s.tty {
+					msg := fmt.Sprintf("\r\n\033[33m[sprite] Connection lost, reconnecting (attempt %d/%d)...\033[0m\r\n", attempt+1, maxRetries)
+					s.ch.Write([]byte(msg))
+				}
+
+				slog.WarnContext(ctx, "Sprite connection lost, retrying",
+					"attempt", attempt+1,
+					"max_retries", maxRetries,
+					"delay", delay,
+					"error", err)
 
 				select {
-				case <-time.After(time.Duration(mrand.Int63n(delay))):
+				case <-time.After(delay + time.Duration(mrand.Int63n(int64(delay/2)))):
 					continue
 				case <-ctx.Done():
 					err = ctx.Err()
@@ -656,8 +758,11 @@ func shouldRetry(err error) bool {
 	transientMessages := []string{
 		"connection refused",
 		"connection reset",
+		"connection reset by peer",
 		"no such host",
 		"i/o timeout",
+		"broken pipe",
+		"websocket: close",
 	}
 	errLower := strings.ToLower(err.Error())
 	for _, msg := range transientMessages {
@@ -669,7 +774,7 @@ func shouldRetry(err error) bool {
 	return false
 }
 
-func (s *session) runCommand(ctx context.Context, command string, isShell bool) error {
+func (s *session) runCommand(ctx context.Context, command string, isShell bool, attempt int) error {
 	// Run command directly via sprites SDK
 	var cmd *sprites.Cmd
 	if isShell && s.tty {
@@ -701,9 +806,16 @@ func (s *session) runCommand(ctx context.Context, command string, isShell bool) 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+
+	// Show reconnected message for interactive shells after successful reconnection
+	if attempt > 1 && isShell && s.tty {
+		s.ch.Write([]byte("\033[32m[sprite] Reconnected!\033[0m\r\n"))
+	}
+
 	slog.InfoContext(ctx, "Started exec session",
 		"session.exec.tty", s.tty,
-		"session.exec.cmd", command)
+		"session.exec.cmd", command,
+		"attempt", attempt)
 
 	var exit *sprites.ExitError
 	if err := cmd.Wait(); err != nil && !errors.As(err, &exit) {

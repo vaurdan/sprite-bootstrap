@@ -670,12 +670,12 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
-	// Run command directly via sprites SDK, matching how sprite CLI does it
-	// The sprite-console script handles shell setup and environment
+	// Run command directly via sprites SDK
 	var cmd *sprites.Cmd
 	if command == "" || command == "/.sprite/bin/sprite-console" {
-		// Interactive shell - run sprite-console directly
-		cmd = s.sprite.CommandContext(ctx, "/.sprite/bin/sprite-console")
+		// Interactive shell - run bash -li directly for proper prompt
+		// sprite-console uses --login without -i, which doesn't source .bashrc
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-li")
 	} else {
 		// Execute command via bash for proper shell expansion
 		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)

@@ -37,12 +37,16 @@ var (
 	errUnsupportedReq = errors.New("unsupported request type")
 )
 
-var maxBackoffDuration = 10 * time.Second
-
-// SSH keepalive settings
+// Retry settings for sprite connection recovery
 var (
-	keepaliveInterval = 30 * time.Second // Send keepalive every 30 seconds
-	keepaliveTimeout  = 15 * time.Second // Wait 15 seconds for response
+	initialRetryDelay  = 500 * time.Millisecond // Start with 500ms delay
+	maxBackoffDuration = 5 * time.Second        // Cap backoff at 5 seconds
+)
+
+// SSH keepalive settings - frequent checks for faster recovery after network loss
+var (
+	keepaliveInterval = 15 * time.Second // Send keepalive every 15 seconds
+	keepaliveTimeout  = 10 * time.Second // Wait 10 seconds for response
 )
 
 // Bech32 alphabet for session IDs
@@ -711,7 +715,11 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 			}
 
 			if shouldRetry(err) && attempt < maxRetries {
-				delay := min(1<<min(attempt, 63), int64(maxBackoffDuration))
+				// Exponential backoff: 500ms → 1s → 2s → 4s → 5s (capped)
+				delay := initialRetryDelay << min(attempt-1, 10)
+				if delay > maxBackoffDuration {
+					delay = maxBackoffDuration
+				}
 
 				// Notify user that we're reconnecting (for interactive shells with TTY)
 				if isShell && s.tty {
@@ -722,10 +730,11 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 				slog.WarnContext(ctx, "Sprite connection lost, retrying",
 					"attempt", attempt+1,
 					"max_retries", maxRetries,
+					"delay", delay,
 					"error", err)
 
 				select {
-				case <-time.After(time.Duration(mrand.Int63n(delay))):
+				case <-time.After(delay + time.Duration(mrand.Int63n(int64(delay/2)))):
 					continue
 				case <-ctx.Done():
 					err = ctx.Err()

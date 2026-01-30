@@ -581,6 +581,8 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 		s.env = append(s.env, "COLORTERM=truecolor")
 		s.env = append(s.env, "LANG=en_US.UTF-8")
 		s.env = append(s.env, "LC_ALL=en_US.UTF-8")
+		// Force bash to source .bashrc for proper prompt even in login shells
+		s.env = append(s.env, "BASH_ENV=$HOME/.bashrc")
 		s.tty = true
 		s.setWindow(windowChangeRequest{pr.Cols, pr.Rows, pr.Width, pr.Height})
 

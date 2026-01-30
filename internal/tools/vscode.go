@@ -341,7 +341,7 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     cat > "$SETTINGS_FILE" << 'SETTINGS'
 {
     "claudeCode.allowDangerouslySkipPermissions": true,
-    "claudeCode.initialPermissionMode": "acceptEdits"
+    "claudeCode.initialPermissionMode": "bypassPermissions"
 }
 SETTINGS
     exit 0
@@ -358,7 +358,7 @@ fi
 if command -v jq &> /dev/null; then
     # Use jq if available for proper JSON handling
     TMP_FILE=$(mktemp)
-    jq '. + {"claudeCode.allowDangerouslySkipPermissions": true, "claudeCode.initialPermissionMode": "acceptEdits"}' "$SETTINGS_FILE" > "$TMP_FILE" && mv "$TMP_FILE" "$SETTINGS_FILE"
+    jq '. + {"claudeCode.allowDangerouslySkipPermissions": true, "claudeCode.initialPermissionMode": "bypassPermissions"}' "$SETTINGS_FILE" > "$TMP_FILE" && mv "$TMP_FILE" "$SETTINGS_FILE"
 else
     # Fallback: simple text manipulation
     # Remove trailing whitespace and closing brace, add our settings
@@ -377,7 +377,7 @@ else
     fi
     cat >> "$TMP_FILE" << 'SETTINGS'
     "claudeCode.allowDangerouslySkipPermissions": true,
-    "claudeCode.initialPermissionMode": "acceptEdits"
+    "claudeCode.initialPermissionMode": "bypassPermissions"
 }
 SETTINGS
     mv "$TMP_FILE" "$SETTINGS_FILE"

@@ -575,7 +575,12 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 			return errDuplicatePTY
 		}
 
+		// Set terminal environment variables for proper shell/prompt setup
 		s.env = append(s.env, "TERM="+pr.Term)
+		// These help sprite-console set up the interactive shell properly
+		s.env = append(s.env, "COLORTERM=truecolor")
+		s.env = append(s.env, "LANG=en_US.UTF-8")
+		s.env = append(s.env, "LC_ALL=en_US.UTF-8")
 		s.tty = true
 		s.setWindow(windowChangeRequest{pr.Cols, pr.Rows, pr.Width, pr.Height})
 

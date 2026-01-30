@@ -11,26 +11,40 @@ A cross-platform CLI utility that bootstraps Sprite environments for IDE remote 
 
 ## Installation
 
+### Quick Install (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vaurdan/sprite-bootstrap/main/install.sh | sh
+```
+
+This installs to `~/.local/bin`. Set a custom location with `INSTALL_DIR`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vaurdan/sprite-bootstrap/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+```
+
+### Manual Download
+
+Download the latest binary from [GitHub Releases](https://github.com/vaurdan/sprite-bootstrap/releases):
+
+| Platform | Binary |
+|----------|--------|
+| Linux (x86_64) | `sprite-bootstrap-linux-amd64` |
+| Linux (ARM64) | `sprite-bootstrap-linux-arm64` |
+| macOS (Intel) | `sprite-bootstrap-darwin-amd64` |
+| macOS (Apple Silicon) | `sprite-bootstrap-darwin-arm64` |
+
+```bash
+# Example: macOS Apple Silicon
+curl -fsSL https://github.com/vaurdan/sprite-bootstrap/releases/latest/download/sprite-bootstrap-darwin-arm64 -o sprite-bootstrap
+chmod +x sprite-bootstrap
+mv sprite-bootstrap ~/.local/bin/
+```
+
 ### From Source
 
 ```bash
 go build -o sprite-bootstrap
-```
-
-### Cross-compile
-
-```bash
-# Linux
-GOOS=linux GOARCH=amd64 go build -o dist/sprite-bootstrap-linux-amd64
-
-# macOS (Intel)
-GOOS=darwin GOARCH=amd64 go build -o dist/sprite-bootstrap-darwin-amd64
-
-# macOS (Apple Silicon)
-GOOS=darwin GOARCH=arm64 go build -o dist/sprite-bootstrap-darwin-arm64
-
-# Windows
-GOOS=windows GOARCH=amd64 go build -o dist/sprite-bootstrap-windows-amd64.exe
 ```
 
 ## Usage

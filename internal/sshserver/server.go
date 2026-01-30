@@ -248,6 +248,8 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 			switch newCh.ChannelType() {
 			case "session":
 				go c.handleSession(ctx, newCh, sprite)
+			case "direct-tcpip":
+				go c.handleDirectTCPIP(ctx, newCh, sprite)
 			default:
 				newCh.Reject(ssh.UnknownChannelType, "unknown channel type")
 			}
@@ -294,6 +296,52 @@ type ptyRequest struct {
 type windowChangeRequest struct {
 	Cols, Rows    uint32
 	Width, Height uint32
+}
+
+// directTCPIPChannelData is the payload for direct-tcpip channel requests
+type directTCPIPChannelData struct {
+	DestAddr   string
+	DestPort   uint32
+	OriginAddr string
+	OriginPort uint32
+}
+
+// handleDirectTCPIP handles direct-tcpip channel requests for TCP port forwarding
+func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, sprite *sprites.Sprite) {
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	// Parse the channel data
+	var channelData directTCPIPChannelData
+	if err := ssh.Unmarshal(newCh.ExtraData(), &channelData); err != nil {
+		newCh.Reject(ssh.ConnectionFailed, "failed to parse channel data")
+		return
+	}
+
+	slog.DebugContext(ctx, "direct-tcpip channel request",
+		"dest", fmt.Sprintf("%s:%d", channelData.DestAddr, channelData.DestPort),
+		"origin", fmt.Sprintf("%s:%d", channelData.OriginAddr, channelData.OriginPort))
+
+	ch, reqs, err := newCh.Accept()
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to accept direct-tcpip channel", "exception", err)
+		return
+	}
+	defer ch.Close()
+
+	// Discard any channel requests
+	go ssh.DiscardRequests(reqs)
+
+	// Use netcat on the sprite to forward the connection
+	// This connects to the destination host:port on the sprite's network
+	cmd := sprite.CommandContext(ctx, "nc", channelData.DestAddr, fmt.Sprintf("%d", channelData.DestPort))
+	cmd.Stdin = ch
+	cmd.Stdout = ch
+	cmd.Stderr = ch.Stderr()
+
+	if err := cmd.Run(); err != nil {
+		slog.DebugContext(ctx, "direct-tcpip forward ended", "exception", err)
+	}
 }
 
 func (c *sshConn) handleSession(ctx context.Context, newCh ssh.NewChannel, sprite *sprites.Sprite) {

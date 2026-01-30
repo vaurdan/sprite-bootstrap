@@ -281,6 +281,13 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		}
 	}
 
+	// Configure Claude Code settings for skip permissions mode
+	if opts.Sprite != nil {
+		if err := configureClaudeCodeSettings(ctx, opts.Sprite); err != nil {
+			fmt.Printf("%s⚠%s Failed to configure Claude Code settings: %v\n", ColorYellow, ColorReset, err)
+		}
+	}
+
 	// Launch VS Code
 	if err := launchVSCode(binary, opts); err != nil {
 		fmt.Printf("%s⚠%s Failed to launch VS Code: %v\n", ColorYellow, ColorReset, err)
@@ -308,6 +315,80 @@ func isClaudeCodeInstalledOnRemote(ctx context.Context, sprite *sprites.Sprite) 
 		return false
 	}
 	return strings.TrimSpace(string(output)) != ""
+}
+
+// configureClaudeCodeSettings ensures VS Code remote settings have Claude Code skip permissions enabled
+func configureClaudeCodeSettings(ctx context.Context, sprite *sprites.Sprite) error {
+	if sprite == nil {
+		return fmt.Errorf("sprite is nil")
+	}
+
+	configCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Add Claude Code settings to VS Code server Machine settings
+	// This enables skip permissions mode by default for Claude Code
+	script := `
+set -e
+SETTINGS_DIR="$HOME/.vscode-server/data/Machine"
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+
+# Create settings directory if needed
+mkdir -p "$SETTINGS_DIR"
+
+# If settings file doesn't exist, create it with our settings
+if [ ! -f "$SETTINGS_FILE" ]; then
+    cat > "$SETTINGS_FILE" << 'SETTINGS'
+{
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "claudeCode.initialPermissionMode": "acceptEdits"
+}
+SETTINGS
+    exit 0
+fi
+
+# Settings file exists - check if our settings are already there
+if grep -q '"claudeCode.allowDangerouslySkipPermissions"' "$SETTINGS_FILE"; then
+    # Already configured
+    exit 0
+fi
+
+# Need to add our settings to existing file
+# Use a simple approach: if file ends with }, insert before it
+if command -v jq &> /dev/null; then
+    # Use jq if available for proper JSON handling
+    TMP_FILE=$(mktemp)
+    jq '. + {"claudeCode.allowDangerouslySkipPermissions": true, "claudeCode.initialPermissionMode": "acceptEdits"}' "$SETTINGS_FILE" > "$TMP_FILE" && mv "$TMP_FILE" "$SETTINGS_FILE"
+else
+    # Fallback: simple text manipulation
+    # Remove trailing whitespace and closing brace, add our settings
+    TMP_FILE=$(mktemp)
+    # Read file, remove trailing }, add comma if needed, add our settings, close
+    content=$(cat "$SETTINGS_FILE")
+    # Remove trailing whitespace and }
+    content=$(echo "$content" | sed 's/}[[:space:]]*$//')
+    # Check if content has any properties (contains a colon)
+    if echo "$content" | grep -q ':'; then
+        # Has existing properties, need comma
+        echo "${content}," > "$TMP_FILE"
+    else
+        # Empty object, no comma needed
+        echo "$content" > "$TMP_FILE"
+    fi
+    cat >> "$TMP_FILE" << 'SETTINGS'
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "claudeCode.initialPermissionMode": "acceptEdits"
+}
+SETTINGS
+    mv "$TMP_FILE" "$SETTINGS_FILE"
+fi
+`
+
+	cmd := sprite.CommandContext(configCtx, "/bin/bash", "-c", script)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	return cmd.Run()
 }
 
 // installClaudeCodeOnRemote downloads and installs the Claude Code extension on the sprite

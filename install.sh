@@ -64,36 +64,33 @@ detect_platform() {
     info "Detected platform: $PLATFORM"
 }
 
-# Determine the best install directory for the platform
+# Check if a directory is in PATH
+dir_in_path() {
+    case ":$PATH:" in
+        *":$1:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Determine the best install directory
 determine_install_dir() {
     # User override takes precedence
     if [ -n "$INSTALL_DIR" ]; then
+        info "Install directory: $INSTALL_DIR"
         return
     fi
 
-    case "$OS" in
-        darwin)
-            # macOS: prefer /usr/local/bin (standard, in PATH)
-            if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
-                INSTALL_DIR="/usr/local/bin"
-            elif [ -d "/usr/local/bin" ]; then
-                # Directory exists but not writable, will need sudo
-                INSTALL_DIR="/usr/local/bin"
-                NEED_SUDO=1
-            else
-                # Fallback to user directory
-                INSTALL_DIR="$HOME/.local/bin"
-            fi
-            ;;
-        linux)
-            # Linux: prefer ~/.local/bin (XDG standard)
-            INSTALL_DIR="$HOME/.local/bin"
-            ;;
-        *)
-            INSTALL_DIR="$HOME/.local/bin"
-            ;;
-    esac
+    # Check common bin directories in preference order
+    for dir in "$HOME/.local/bin" "$HOME/bin" "$HOME/.bin"; do
+        if dir_in_path "$dir"; then
+            INSTALL_DIR="$dir"
+            info "Install directory: $INSTALL_DIR"
+            return
+        fi
+    done
 
+    # None found in PATH, use default and warn later
+    INSTALL_DIR="$HOME/.local/bin"
     info "Install directory: $INSTALL_DIR"
 }
 
@@ -132,15 +129,9 @@ install() {
 
     chmod +x "$TMP_FILE"
 
-    # Create install directory and move binary (with sudo if needed)
-    if [ "$NEED_SUDO" = "1" ]; then
-        info "Requesting sudo access to install to $INSTALL_DIR..."
-        sudo mkdir -p "$INSTALL_DIR"
-        sudo mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}"
-    else
-        mkdir -p "$INSTALL_DIR"
-        mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}"
-    fi
+    # Create install directory and move binary
+    mkdir -p "$INSTALL_DIR" || error "Failed to create directory: $INSTALL_DIR"
+    mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install binary"
 
     success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
 }

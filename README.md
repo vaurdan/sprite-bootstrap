@@ -17,11 +17,7 @@ A cross-platform CLI utility that bootstraps Sprite environments for IDE remote 
 curl -fsSL https://raw.githubusercontent.com/vaurdan/sprite-bootstrap/main/install.sh | sh
 ```
 
-The script automatically installs to:
-- **macOS**: `/usr/local/bin` (may prompt for sudo)
-- **Linux**: `~/.local/bin`
-
-Override with `INSTALL_DIR`:
+The script installs to `~/.local/bin`, `~/bin`, or `~/.bin` (whichever is in your PATH). Override with `INSTALL_DIR`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vaurdan/sprite-bootstrap/main/install.sh | INSTALL_DIR=~/.bin sh

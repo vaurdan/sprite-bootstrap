@@ -275,6 +275,14 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		}
 	}
 
+	// Fix Claude Code project path bug (VS Code extension adds trailing dash to path)
+	if opts.Sprite != nil {
+		if err := fixClaudeCodeProjectPaths(ctx, opts.Sprite); err != nil {
+			// Non-fatal, just log
+			fmt.Printf("%s⚠%s Failed to fix Claude Code project paths: %v\n", ColorYellow, ColorReset, err)
+		}
+	}
+
 	// Check if Claude Code extension is already installed on remote
 	if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
 		// Not installed - ask user if they want to install it
@@ -295,6 +303,57 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	}
 
 	return nil
+}
+
+// fixClaudeCodeProjectPaths works around a bug in the Claude Code VS Code extension
+// where it looks for project directories with a trailing dash (e.g., "-home-sprite-")
+// but the CLI creates them without the trailing dash (e.g., "-home-sprite").
+// This creates symlinks so the extension can find existing sessions.
+// See: https://github.com/anthropics/claude-code/issues/9258
+func fixClaudeCodeProjectPaths(ctx context.Context, sprite *sprites.Sprite) error {
+	if sprite == nil {
+		return fmt.Errorf("sprite is nil")
+	}
+
+	fixCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// For each project directory without a trailing dash,
+	// create a symlink with the trailing dash pointing to it
+	script := `
+set -e
+PROJECTS_DIR="$HOME/.claude/projects"
+
+if [ ! -d "$PROJECTS_DIR" ]; then
+    exit 0
+fi
+
+# Find all directories that don't end with a dash
+for dir in "$PROJECTS_DIR"/*; do
+    if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+        # Check if it doesn't already end with a dash
+        case "$dir" in
+            *-)
+                # Already ends with dash, skip
+                ;;
+            *)
+                # Create symlink with trailing dash if it doesn't exist
+                if [ ! -e "${dir}-" ]; then
+                    ln -s "$dir" "${dir}-"
+                fi
+                ;;
+        esac
+    fi
+done
+
+echo "done"
+`
+
+	cmd := sprite.CommandContext(fixCtx, "/bin/bash", "-c", script)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	return cmd.Run()
 }
 
 // cleanupStaleVSCodeState removes stale VS Code workspace locks and duplicate workspace folders

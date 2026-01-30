@@ -115,6 +115,13 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 		fmt.Printf("%s✓%s SSH server listening on port %d\n", ColorGreen, ColorReset, opts.LocalPort)
 	}
 
+	// Test SSH connection (also accepts host key fingerprint)
+	fmt.Printf("%s⏳%s Testing SSH connection...\n", ColorYellow, ColorReset)
+	if err := testSSHConnection(ctx, opts); err != nil {
+		return fmt.Errorf("SSH connection test failed: %w", err)
+	}
+	fmt.Printf("%s✓%s SSH connection verified\n", ColorGreen, ColorReset)
+
 	// Tool-specific setup
 	if err := tool.Setup(ctx, opts); err != nil {
 		return fmt.Errorf("failed tool setup: %w", err)
@@ -297,4 +304,46 @@ func GetServePid() int {
 	}
 
 	return pid
+}
+
+// testSSHConnection tests the SSH connection and accepts the host key fingerprint
+func testSSHConnection(ctx context.Context, opts SetupOptions) error {
+	// Use StrictHostKeyChecking=accept-new to automatically accept the host key
+	// on first connection, but reject if it changes later
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=30",
+		"-o", "BatchMode=yes",
+		"-p", strconv.Itoa(opts.LocalPort),
+		fmt.Sprintf("%s@localhost", opts.SpriteName),
+		"true",
+	)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	// Retry a few times in case the server is still spinning up
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			// Recreate command for retry
+			cmd = exec.CommandContext(ctx, "ssh",
+				"-o", "StrictHostKeyChecking=accept-new",
+				"-o", "UserKnownHostsFile=/dev/null",
+				"-o", "ConnectTimeout=30",
+				"-o", "BatchMode=yes",
+				"-p", strconv.Itoa(opts.LocalPort),
+				fmt.Sprintf("%s@localhost", opts.SpriteName),
+				"true",
+			)
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+			continue
+		}
+		return nil
+	}
+
+	return fmt.Errorf("failed after 5 attempts: %w", lastErr)
 }

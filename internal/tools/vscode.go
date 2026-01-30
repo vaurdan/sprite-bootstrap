@@ -252,6 +252,20 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		return nil
 	}
 
+	// Clean up stale VS Code server processes on the sprite before connecting
+	// This prevents "Failed to parse remote port" errors when reconnecting
+	if opts.Sprite != nil {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cmd := opts.Sprite.CommandContext(cleanupCtx,
+			"/bin/bash", "-c",
+			"pkill -f '[v]scode-server' 2>/dev/null; rm -f ~/.vscode-server/.cli.*.log 2>/dev/null; true",
+		)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		_ = cmd.Run() // Best effort
+		cancel()
+	}
+
 	// Install Remote-SSH extension if needed
 	if !hasExtension(binary, remoteSSHExtensionID) {
 		fmt.Printf("%s⏳%s Installing Remote-SSH extension...\n", ColorYellow, ColorReset)

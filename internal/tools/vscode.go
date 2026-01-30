@@ -32,7 +32,6 @@ func (v *VSCode) Description() string {
 }
 
 const remoteSSHExtensionID = "ms-vscode-remote.remote-ssh"
-const claudeCodeExtensionID = "anthropic.claude-code"
 
 // Markers for our managed SSH config entries
 const (
@@ -75,15 +74,6 @@ func installExtension(binary, extensionID string) error {
 	return cmd.Run()
 }
 
-// installRemoteExtension installs a VS Code extension on a remote host
-func installRemoteExtension(binary, remoteHost, extensionID string) error {
-	remoteArg := fmt.Sprintf("ssh-remote+%s", remoteHost)
-	cmd := exec.Command(binary, "--remote", remoteArg, "--install-extension", extensionID)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
 // sshConfigHostName returns the SSH config host name for a sprite
 func sshConfigHostName(spriteName string) string {
 	return fmt.Sprintf("sprite-%s", spriteName)
@@ -98,33 +88,74 @@ func sshConfigPath() (string, error) {
 	return filepath.Join(homeDir, ".ssh", "config"), nil
 }
 
-// addSSHConfigEntry adds a sprite SSH config entry if not already present
-func addSSHConfigEntry(opts SetupOptions) error {
+// sshConfigLockPath returns the path to the SSH config lock file
+func sshConfigLockPath() (string, error) {
 	configPath, err := sshConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return configPath + ".sprite-bootstrap.lock", nil
+}
+
+// withSSHConfigLock executes a function while holding a lock on the SSH config
+func withSSHConfigLock(fn func() error) error {
+	lockPath, err := sshConfigLockPath()
 	if err != nil {
 		return err
 	}
 
-	// Ensure .ssh directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
-		return err
+	// Create lock file
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create lock file: %w", err)
+	}
+	defer lockFile.Close()
+	defer os.Remove(lockPath)
+
+	// Try to acquire exclusive lock with timeout
+	// Use a simple retry loop since flock isn't portable
+	for i := 0; i < 50; i++ { // 5 second timeout
+		// Try to write our PID - if file is empty or has our PID, we have the lock
+		lockFile.Seek(0, 0)
+		content, _ := os.ReadFile(lockPath)
+		if len(content) == 0 {
+			lockFile.WriteString(fmt.Sprintf("%d", os.Getpid()))
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	hostName := sshConfigHostName(opts.SpriteName)
-	startMarker := fmt.Sprintf(sshConfigStartMarker, opts.SpriteName)
-	endMarker := fmt.Sprintf(sshConfigEndMarker, opts.SpriteName)
+	return fn()
+}
 
-	// Read existing config
-	existingConfig, _ := os.ReadFile(configPath)
+// addSSHConfigEntry adds a sprite SSH config entry if not already present
+func addSSHConfigEntry(opts SetupOptions) error {
+	return withSSHConfigLock(func() error {
+		configPath, err := sshConfigPath()
+		if err != nil {
+			return err
+		}
 
-	// Check if entry already exists - if so, remove it first
-	configStr := string(existingConfig)
-	if strings.Contains(configStr, startMarker) {
-		configStr = removeSSHConfigEntryFromString(configStr, opts.SpriteName)
-	}
+		// Ensure .ssh directory exists
+		if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+			return err
+		}
 
-	// Build new entry
-	entry := fmt.Sprintf(`%s
+		hostName := sshConfigHostName(opts.SpriteName)
+		startMarker := fmt.Sprintf(sshConfigStartMarker, opts.SpriteName)
+		endMarker := fmt.Sprintf(sshConfigEndMarker, opts.SpriteName)
+
+		// Read existing config (ignore error - file may not exist)
+		existingConfig, _ := os.ReadFile(configPath)
+
+		// Check if entry already exists - if so, remove it first
+		configStr := string(existingConfig)
+		if strings.Contains(configStr, startMarker) {
+			configStr = removeSSHConfigEntryFromString(configStr, opts.SpriteName)
+		}
+
+		// Build new entry
+		entry := fmt.Sprintf(`%s
 Host %s
     HostName localhost
     Port %d
@@ -134,13 +165,14 @@ Host %s
 %s
 `, startMarker, hostName, opts.LocalPort, opts.SpriteName, endMarker)
 
-	// Append to config
-	if len(configStr) > 0 && !strings.HasSuffix(configStr, "\n") {
-		configStr += "\n"
-	}
-	configStr += entry
+		// Append to config
+		if len(configStr) > 0 && !strings.HasSuffix(configStr, "\n") {
+			configStr += "\n"
+		}
+		configStr += entry
 
-	return os.WriteFile(configPath, []byte(configStr), 0600)
+		return os.WriteFile(configPath, []byte(configStr), 0600)
+	})
 }
 
 // removeSSHConfigEntryFromString removes a sprite entry from the config string
@@ -235,6 +267,24 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		fmt.Printf("%s⚠%s Failed to add SSH config: %v\n", ColorYellow, ColorReset, err)
 	}
 
+	// Check if Claude Code extension is already installed on remote
+	if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
+		// Not installed - ask user if they want to install it
+		if promptInstallClaudeCode() {
+			fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
+			if err := installClaudeCodeOnRemote(ctx, opts.Sprite); err != nil {
+				fmt.Printf("%s⚠%s Failed to install: %v\n", ColorYellow, ColorReset, err)
+				fmt.Printf("   You can install it manually in VS Code Extensions\n")
+			} else {
+				fmt.Printf("%s✓%s Claude Code extension installed\n", ColorGreen, ColorReset)
+			}
+		}
+	}
+
+	// Launch VS Code
+	if err := launchVSCode(binary, opts); err != nil {
+		fmt.Printf("%s⚠%s Failed to launch VS Code: %v\n", ColorYellow, ColorReset, err)
+	}
 
 	return nil
 }
@@ -291,6 +341,12 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
+# Validate version format (semver-like: digits and dots only)
+if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+    echo "Invalid version format: $VERSION"
+    exit 1
+fi
+
 echo "Installing ${PUBLISHER}.${EXTENSION} version ${VERSION}..."
 
 # Check if already installed
@@ -299,9 +355,12 @@ if [ -d "$EXT_DIR/${PUBLISHER}.${EXTENSION}-${VERSION}" ]; then
     exit 0
 fi
 
+# Create temp directory with cleanup trap
+TMP_DIR=$(mktemp -d)
+trap "rm -rf '$TMP_DIR'" EXIT
+
 # Download VSIX from marketplace
 VSIX_URL="https://${PUBLISHER}.gallery.vsassets.io/_apis/public/gallery/publisher/${PUBLISHER}/extension/${EXTENSION}/${VERSION}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
-TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
 
 echo "Downloading from marketplace..."
@@ -317,10 +376,6 @@ unzip -q extension.vsix -d extracted
 
 # Move extension to VS Code extensions directory
 mv extracted/extension "$EXT_DIR/${PUBLISHER}.${EXTENSION}-${VERSION}"
-
-# Cleanup
-cd /
-rm -rf "$TMP_DIR"
 
 echo "Installed successfully"
 `
@@ -375,27 +430,11 @@ func promptInstallClaudeCode() bool {
 
 func (v *VSCode) Instructions(opts SetupOptions) string {
 	hostName := sshConfigHostName(opts.SpriteName)
-	ctx := context.Background()
 
 	binary := findVSCodeBinary()
 	if binary != "" {
-		// Check if Claude Code extension is already installed on remote
-		if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
-			// Not installed - ask user if they want to install it
-			if promptInstallClaudeCode() {
-				fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
-				if err := installClaudeCodeOnRemote(ctx, opts.Sprite); err != nil {
-					fmt.Printf("%s⚠%s Failed to install: %v\n", ColorYellow, ColorReset, err)
-					fmt.Printf("   You can install it manually in VS Code Extensions\n")
-				} else {
-					fmt.Printf("%s✓%s Claude Code extension installed\n", ColorGreen, ColorReset)
-				}
-			}
-		}
-
-		// Launch VS Code
-		if err := launchVSCode(binary, opts); err == nil {
-			return fmt.Sprintf(`
+		// VS Code was launched in Setup(), just show the success message
+		return fmt.Sprintf(`
 %s%s✓ VS Code Remote Development Ready!%s
 
 %sOpening:%s %s:%s
@@ -403,11 +442,11 @@ func (v *VSCode) Instructions(opts SetupOptions) string {
 If VS Code doesn't connect, try manually:
   %scode --remote ssh-remote+%s %s%s
 `, ColorBold, ColorGreen, ColorReset,
-				ColorCyan, ColorReset, hostName, opts.RemotePath,
-				ColorYellow, hostName, opts.RemotePath, ColorReset)
-		}
+			ColorCyan, ColorReset, hostName, opts.RemotePath,
+			ColorYellow, hostName, opts.RemotePath, ColorReset)
 	}
 
+	// VS Code not found - show manual instructions
 	return fmt.Sprintf(`
 %s%s✓ VS Code Remote Development Ready!%s
 

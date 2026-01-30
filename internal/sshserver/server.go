@@ -663,9 +663,10 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
-	// Use bash -l (login shell) to ensure profile is sourced and PATH is set correctly
+	// Note: We use sudo without --login to avoid double-login-shell issues
+	// The bash -l handles login shell sourcing; sudo --login would interfere
 	cmd := s.sprite.CommandContext(
-		ctx, "/usr/bin/sudo", "--user=sprite", "--login",
+		ctx, "/usr/bin/sudo", "--user=sprite",
 		"/bin/bash", "-l", "-c", command,
 	)
 

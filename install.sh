@@ -6,7 +6,6 @@ set -e
 
 REPO="vaurdan/sprite-bootstrap"
 BINARY_NAME="sprite-bootstrap"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Colors
 RED='\033[0;31m'
@@ -65,6 +64,39 @@ detect_platform() {
     info "Detected platform: $PLATFORM"
 }
 
+# Determine the best install directory for the platform
+determine_install_dir() {
+    # User override takes precedence
+    if [ -n "$INSTALL_DIR" ]; then
+        return
+    fi
+
+    case "$OS" in
+        darwin)
+            # macOS: prefer /usr/local/bin (standard, in PATH)
+            if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
+                INSTALL_DIR="/usr/local/bin"
+            elif [ -d "/usr/local/bin" ]; then
+                # Directory exists but not writable, will need sudo
+                INSTALL_DIR="/usr/local/bin"
+                NEED_SUDO=1
+            else
+                # Fallback to user directory
+                INSTALL_DIR="$HOME/.local/bin"
+            fi
+            ;;
+        linux)
+            # Linux: prefer ~/.local/bin (XDG standard)
+            INSTALL_DIR="$HOME/.local/bin"
+            ;;
+        *)
+            INSTALL_DIR="$HOME/.local/bin"
+            ;;
+    esac
+
+    info "Install directory: $INSTALL_DIR"
+}
+
 # Get latest release version
 get_latest_version() {
     LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
@@ -90,10 +122,7 @@ install() {
 
     info "Downloading from: $BINARY_URL"
 
-    # Create install directory if it doesn't exist
-    mkdir -p "$INSTALL_DIR"
-
-    # Download binary
+    # Download binary to temp file
     TMP_FILE=$(mktemp)
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$BINARY_URL" -o "$TMP_FILE" || error "Download failed"
@@ -101,9 +130,17 @@ install() {
         wget -q "$BINARY_URL" -O "$TMP_FILE" || error "Download failed"
     fi
 
-    # Install binary
     chmod +x "$TMP_FILE"
-    mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Create install directory and move binary (with sudo if needed)
+    if [ "$NEED_SUDO" = "1" ]; then
+        info "Requesting sudo access to install to $INSTALL_DIR..."
+        sudo mkdir -p "$INSTALL_DIR"
+        sudo mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}"
+    else
+        mkdir -p "$INSTALL_DIR"
+        mv "$TMP_FILE" "${INSTALL_DIR}/${BINARY_NAME}"
+    fi
 
     success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
 }
@@ -140,6 +177,7 @@ main() {
     info ""
 
     detect_platform
+    determine_install_dir
     get_latest_version
     install
     check_path

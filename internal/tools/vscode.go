@@ -268,6 +268,8 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 		} else {
 			fmt.Printf("    [debug] cleanup error: %v\n", err)
 		}
+	} else {
+		fmt.Printf("    [debug] cleanup exit code: 0\n")
 	}
 	return err
 }

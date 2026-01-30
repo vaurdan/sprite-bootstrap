@@ -75,17 +75,20 @@ func cleanupSprite(spriteName string) {
 		return
 	}
 
-	// Kill Zed remote server processes
-	// Using pkill with -f to match the process name pattern
+	// Kill Zed remote server processes (both proxy and run processes)
+	// The server has proxy processes and a main run process per workspace
 	cleanupCmd := sprite.CommandContext(ctx, "pkill", "-f", "zed-remote-server")
 	_ = cleanupCmd.Run() // Ignore errors - might not find any processes
 
-	// Also clean up any orphaned proxy shells
-	cleanupCmd = sprite.CommandContext(ctx, "pkill", "-f", "proxy.*--identifier")
+	// Clean up Zed server state directory (Unix sockets and PID files)
+	// This is at ~/.local/share/zed/server_state/workspace-*/
+	cleanupCmd = sprite.CommandContext(ctx, "rm", "-rf", "/home/sprite/.local/share/zed/server_state")
 	_ = cleanupCmd.Run()
 
-	// Clean up Zed server state directory
-	cleanupCmd = sprite.CommandContext(ctx, "rm", "-rf", "/home/sprite/.local/share/zed/server_state")
+	// Clean up old Zed server binaries in ~/.zed_server/
+	// Zed should do this itself, but sometimes fails
+	cleanupCmd = sprite.CommandContext(ctx, "bash", "-c",
+		`find ~/.zed_server -name 'zed-remote-server-*' -mtime +1 -delete 2>/dev/null || true`)
 	_ = cleanupCmd.Run()
 
 	fmt.Printf("%s✓%s Cleaned up Zed processes on %s\n",

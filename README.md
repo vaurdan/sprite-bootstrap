@@ -57,6 +57,12 @@ sprite-bootstrap zed -s mysprite
 
 # VS Code
 sprite-bootstrap vscode -s mysprite
+
+# Open a specific directory
+sprite-bootstrap zed -s mysprite --path myproject
+
+# Use a different local port
+sprite-bootstrap zed -s mysprite -p 2223
 ```
 
 These commands configure SSH and provide connection instructions for each IDE.
@@ -97,12 +103,22 @@ Local Machine                              Sprite API
 
 ## Flags
 
+### Global Flags
+
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--listen` | `-l` | Address to listen on (serve) | :2222 |
 | `--sprite` | `-s` | Sprite name | (required for zed/vscode) |
 | `--org` | `-o` | Organization | (optional) |
+| `--port` | `-p` | Local SSH port | 2222 |
+| `--path` | | Remote path (relative to /home/sprite or absolute) | /home/sprite |
 | `--help` | `-h` | Show help | |
+
+### Serve Command Flags
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--listen` | `-l` | Address to listen on | :2222 |
+| `--host-key` | | Path to SSH host key | (auto-generated) |
 
 ## Adding New IDE Support
 

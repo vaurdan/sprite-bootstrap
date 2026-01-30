@@ -252,25 +252,16 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	defer cancel()
 
 	// Kill VS Code server and related processes
-	// Using pkill with multiple patterns to catch all VS Code related processes
-	// The 'true' at the end ensures we return 0 even if no processes were found
+	// Use pgrep to find PIDs first, then kill them - this avoids pkill killing itself
+	// (pkill -f 'vscode-server' would match its own command line containing that string)
 	cmd := sprite.CommandContext(cleanupCtx,
 		"/bin/bash", "-c",
-		"pkill -f 'vscode-server' 2>/dev/null; pkill -f '\\.vscode-server' 2>/dev/null; pkill -f 'code-server' 2>/dev/null; true",
+		"pids=$(pgrep -f '[v]scode-server' 2>/dev/null); [ -n \"$pids\" ] && kill $pids 2>/dev/null; true",
 	)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	err := cmd.Run()
-	if err != nil {
-		// Log detailed error info for debugging
-		if exitErr, ok := err.(*sprites.ExitError); ok {
-			fmt.Printf("    [debug] cleanup exit code: %d\n", exitErr.ExitCode())
-		} else {
-			fmt.Printf("    [debug] cleanup error type: %T, msg: %v\n", err, err)
-		}
-	}
-	return err
+	return cmd.Run()
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

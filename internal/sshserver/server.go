@@ -520,6 +520,12 @@ func (c *sshConn) handleSession(ctx context.Context, newCh ssh.NewChannel, sprit
 		ch:     ch,
 		cancel: cancel,
 		cond:   sync.NewCond(new(sync.Mutex)),
+		// Set default environment variables for all sessions
+		env: []string{
+			"SHELL=/bin/bash",
+			"LANG=en_US.UTF-8",
+			"LC_ALL=en_US.UTF-8",
+		},
 	}
 
 	for {
@@ -556,15 +562,18 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 			s.env = append(s.env, er.Name+"="+er.Value)
 			return nil
 		}
-	case "exec", "shell":
+	case "shell":
+		// Shell request - run login shell
+		return s.exec(ctx, "", true, maxSpriteRetries)
+	case "exec":
 		var er execRequest
 		if len(req.Payload) > 0 {
 			if err := ssh.Unmarshal(req.Payload, &er); err != nil {
 				return err
 			}
 		}
-
-		return s.exec(ctx, er.Command, maxSpriteRetries)
+		// Exec request - run command via bash -c
+		return s.exec(ctx, er.Command, er.Command == "", maxSpriteRetries)
 	case "pty-req":
 		var pr ptyRequest
 		if err := ssh.Unmarshal(req.Payload, &pr); err != nil {
@@ -575,7 +584,9 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 			return errDuplicatePTY
 		}
 
+		// Set terminal-specific environment variables
 		s.env = append(s.env, "TERM="+pr.Term)
+		s.env = append(s.env, "COLORTERM=truecolor")
 		s.tty = true
 		s.setWindow(windowChangeRequest{pr.Cols, pr.Rows, pr.Width, pr.Height})
 
@@ -603,19 +614,15 @@ func (s *session) setWindow(win windowChangeRequest) {
 	s.cond.Signal()
 }
 
-func (s *session) exec(ctx context.Context, command string, maxRetries int) error {
+func (s *session) exec(ctx context.Context, command string, isShell bool, maxRetries int) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errAlreadyRunning
-	}
-
-	if command == "" {
-		command = "/.sprite/bin/sprite-console"
 	}
 
 	go func() {
 		attempt := 1
 		for {
-			err := s.runCommand(ctx, command)
+			err := s.runCommand(ctx, command, isShell)
 			if err == nil {
 				break
 			}
@@ -662,15 +669,23 @@ func shouldRetry(err error) bool {
 	return false
 }
 
-func (s *session) runCommand(ctx context.Context, command string) error {
-	// Use bash -l (login shell) to ensure profile is sourced and PATH is set correctly
-	cmd := s.sprite.CommandContext(
-		ctx, "/usr/bin/sudo", "--user=sprite", "--login",
-		"/bin/bash", "-l", "-c", command,
-	)
+func (s *session) runCommand(ctx context.Context, command string, isShell bool) error {
+	// Run command directly via sprites SDK
+	var cmd *sprites.Cmd
+	if isShell && s.tty {
+		// Interactive login shell for "shell" requests with PTY (Zed)
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-li")
+	} else if isShell {
+		// Non-interactive login shell for "shell" requests without PTY (VS Code)
+		// VS Code pipes commands through stdin
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-l")
+	} else {
+		// Execute command via bash -c for "exec" requests
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)
+	}
 
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()
 	cmd.Env = s.env
+	// Set TTY if client requested PTY (pty-req)
 	if s.tty {
 		cmd.SetTTY(true)
 		// SetTTYSize takes (rows, cols) not (cols, rows)
@@ -680,6 +695,8 @@ func (s *session) runCommand(ctx context.Context, command string) error {
 		defer cancel()
 		go s.listenForWindowChange(winCtx, cmd)
 	}
+	// Set stdin/stdout/stderr after TTY setup
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()
 
 	if err := cmd.Start(); err != nil {
 		return err

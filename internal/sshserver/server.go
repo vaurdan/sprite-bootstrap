@@ -332,23 +332,38 @@ func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, s
 	// Discard any channel requests
 	go ssh.DiscardRequests(reqs)
 
-	// Forward TCP connection through the sprite using bash /dev/tcp
-	// This is more portable than netcat and works on most Linux systems
+	// Forward TCP connection through the sprite using socat or nc
+	// Run as sprite user like we do for sessions
 	// Note: direct-tcpip channels don't support extended data (stderr),
 	// so we discard stderr to avoid "bad ext data" errors
+	dest := fmt.Sprintf("%s:%d", channelData.DestAddr, channelData.DestPort)
+
+	slog.InfoContext(ctx, "Starting direct-tcpip forward", "dest", dest)
+
+	// Use socat for reliable bidirectional forwarding
+	// Falls back to nc if socat isn't available
 	forwardCmd := fmt.Sprintf(
-		"exec 3<>/dev/tcp/%s/%d; cat <&3 & cat >&3; wait",
+		"socat - TCP:%s:%d 2>/dev/null || nc %s %d",
+		channelData.DestAddr, channelData.DestPort,
 		channelData.DestAddr, channelData.DestPort,
 	)
-	cmd := sprite.CommandContext(ctx, "/bin/bash", "-c", forwardCmd)
+	cmd := sprite.CommandContext(
+		ctx, "/usr/bin/sudo", "--user=sprite", "--login",
+		"/bin/bash", "-c", forwardCmd,
+	)
 	cmd.Stdin = ch
 	cmd.Stdout = ch
 	cmd.Stderr = nil // Discard stderr - direct-tcpip doesn't support extended data
 
-	if err := cmd.Run(); err != nil {
-		slog.DebugContext(ctx, "direct-tcpip forward ended",
-			"dest", fmt.Sprintf("%s:%d", channelData.DestAddr, channelData.DestPort),
-			"exception", err)
+	if err := cmd.Start(); err != nil {
+		slog.ErrorContext(ctx, "Failed to start direct-tcpip forward", "dest", dest, "exception", err)
+		return
+	}
+
+	if err := cmd.Wait(); err != nil {
+		slog.DebugContext(ctx, "direct-tcpip forward ended", "dest", dest, "exception", err)
+	} else {
+		slog.DebugContext(ctx, "direct-tcpip forward completed", "dest", dest)
 	}
 }
 

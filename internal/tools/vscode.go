@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"sprite-bootstrap/internal/config"
+
+	"github.com/charmbracelet/huh"
 	"github.com/superfly/sprites-go"
 )
 
@@ -246,6 +249,68 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	return nil
 }
 
+// isClaudeCodeInstalledOnRemote checks if Claude Code extension is installed on the sprite
+func isClaudeCodeInstalledOnRemote(ctx context.Context, sprite *sprites.Sprite) bool {
+	if sprite == nil {
+		return false
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Check if the extension directory exists in ~/.vscode-server/extensions/
+	cmd := sprite.CommandContext(checkCtx,
+		"/bin/bash", "-c",
+		"ls -d ~/.vscode-server/extensions/anthropic.claude-code-* 2>/dev/null | head -1",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) != ""
+}
+
+// promptInstallClaudeCode asks the user if they want to install Claude Code extension
+// Returns: true = install, false = don't install
+func promptInstallClaudeCode() bool {
+	// Check preferences first
+	prefs, _ := config.LoadPreferences()
+	if prefs.NeverAskClaudeCodeExtension {
+		return false
+	}
+
+	var choice string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Install Claude Code extension on the remote?").
+				Options(
+					huh.NewOption("Yes, install it", "yes"),
+					huh.NewOption("No, skip for now", "no"),
+					huh.NewOption("Never ask again", "never"),
+				).
+				Value(&choice),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		return false
+	}
+
+	switch choice {
+	case "yes":
+		return true
+	case "never":
+		prefs.NeverAskClaudeCodeExtension = true
+		_ = config.SavePreferences(prefs)
+		fmt.Printf("    %s(You can reset this in ~/.sprite-bootstrap/preferences.json)%s\n", ColorYellow, ColorReset)
+		return false
+	default:
+		return false
+	}
+}
+
 // cleanupVSCodeServer kills any existing VS Code server processes on the sprite
 func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -266,17 +331,22 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 
 func (v *VSCode) Instructions(opts SetupOptions) string {
 	hostName := sshConfigHostName(opts.SpriteName)
+	ctx := context.Background()
 
 	binary := findVSCodeBinary()
 	if binary != "" {
-		// Install Claude Code extension on the remote first
-		fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
-		if err := installRemoteExtension(binary, hostName, claudeCodeExtensionID); err != nil {
-			fmt.Printf("%s⚠%s Failed to install Claude Code extension: %v\n", ColorYellow, ColorReset, err)
-			fmt.Printf("   You can install it manually: %scode --remote ssh-remote+%s --install-extension %s%s\n",
-				ColorYellow, hostName, claudeCodeExtensionID, ColorReset)
-		} else {
-			fmt.Printf("%s✓%s Claude Code extension installed on remote\n", ColorGreen, ColorReset)
+		// Check if Claude Code extension is already installed on remote
+		if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
+			// Not installed - ask user if they want to install it
+			if promptInstallClaudeCode() {
+				fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
+				if err := installRemoteExtension(binary, hostName, claudeCodeExtensionID); err != nil {
+					fmt.Printf("%s⚠%s Failed to install Claude Code extension: %v\n", ColorYellow, ColorReset, err)
+					fmt.Printf("   You can install it manually in VS Code: search for 'Claude Code' in Extensions\n")
+				} else {
+					fmt.Printf("%s✓%s Claude Code extension will be installed when VS Code connects\n", ColorGreen, ColorReset)
+				}
+			}
 		}
 
 		// Now launch VS Code
@@ -308,13 +378,12 @@ If VS Code doesn't connect, try manually:
    - Type "Remote-SSH: Connect to Host"
    - Select: %s%s%s
 
-3. Install Claude Code on the remote:
-   %scode --remote ssh-remote+%s --install-extension %s%s
+3. Install Claude Code on the remote (optional):
+   Search for "Claude Code" in VS Code Extensions
 `, ColorBold, ColorGreen, ColorReset,
 		ColorYellow, remoteSSHExtensionID, ColorReset,
 		ColorYellow, hostName, opts.RemotePath, ColorReset,
-		ColorYellow, hostName, ColorReset,
-		ColorYellow, hostName, claudeCodeExtensionID, ColorReset)
+		ColorYellow, hostName, ColorReset)
 }
 
 func (v *VSCode) Validate(ctx context.Context) error {

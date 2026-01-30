@@ -437,8 +437,23 @@ func (v *VSCode) Validate(ctx context.Context) error {
 // Cleanup implements the Cleaner interface for VSCode
 func (v *VSCode) Cleanup(ctx context.Context, sprite *sprites.Sprite) error {
 	spriteName := sprite.Name()
+
+	// Remove SSH config entry
 	if err := removeSSHConfigEntry(spriteName); err != nil {
 		return fmt.Errorf("failed to remove SSH config entry: %w", err)
 	}
+
+	// Kill VS Code server processes on the sprite
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := sprite.CommandContext(cleanupCtx,
+		"/bin/bash", "-c",
+		"pids=$(pgrep -f '[v]scode-server' 2>/dev/null); [ -n \"$pids\" ] && kill $pids 2>/dev/null; true",
+	)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	_ = cmd.Run() // Best effort - ignore errors
+
 	return nil
 }

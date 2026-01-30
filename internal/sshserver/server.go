@@ -562,15 +562,18 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 			s.env = append(s.env, er.Name+"="+er.Value)
 			return nil
 		}
-	case "exec", "shell":
+	case "shell":
+		// Shell request - run login shell
+		return s.exec(ctx, "", true, maxSpriteRetries)
+	case "exec":
 		var er execRequest
 		if len(req.Payload) > 0 {
 			if err := ssh.Unmarshal(req.Payload, &er); err != nil {
 				return err
 			}
 		}
-
-		return s.exec(ctx, er.Command, maxSpriteRetries)
+		// Exec request - run command via bash -c
+		return s.exec(ctx, er.Command, er.Command == "", maxSpriteRetries)
 	case "pty-req":
 		var pr ptyRequest
 		if err := ssh.Unmarshal(req.Payload, &pr); err != nil {
@@ -616,7 +619,7 @@ func (s *session) setWindow(win windowChangeRequest) {
 	s.cond.Signal()
 }
 
-func (s *session) exec(ctx context.Context, command string, maxRetries int) error {
+func (s *session) exec(ctx context.Context, command string, isShell bool, maxRetries int) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errAlreadyRunning
 	}
@@ -628,7 +631,7 @@ func (s *session) exec(ctx context.Context, command string, maxRetries int) erro
 	go func() {
 		attempt := 1
 		for {
-			err := s.runCommand(ctx, command)
+			err := s.runCommand(ctx, command, isShell)
 			if err == nil {
 				break
 			}
@@ -675,20 +678,23 @@ func shouldRetry(err error) bool {
 	return false
 }
 
-func (s *session) runCommand(ctx context.Context, command string) error {
+func (s *session) runCommand(ctx context.Context, command string, isShell bool) error {
 	// Run command directly via sprites SDK
 	var cmd *sprites.Cmd
-	if command == "" || command == "/.sprite/bin/sprite-console" {
-		// Interactive login shell with explicit -i for proper prompt
-		// We bypass sprite-console because Zed's SSH doesn't pass env vars reliably
+	if isShell && s.tty {
+		// Interactive login shell for "shell" requests with PTY (Zed)
 		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-li")
+	} else if isShell {
+		// Non-interactive login shell for "shell" requests without PTY (VS Code)
+		// VS Code pipes commands through stdin
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-l")
 	} else {
-		// Execute command via bash for proper shell expansion
+		// Execute command via bash -c for "exec" requests
 		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)
 	}
 
 	cmd.Env = s.env
-	// Set TTY before stdin/stdout to match sprite CLI behavior
+	// Set TTY if client requested PTY (pty-req)
 	if s.tty {
 		cmd.SetTTY(true)
 		// SetTTYSize takes (rows, cols) not (cols, rows)

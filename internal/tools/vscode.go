@@ -261,7 +261,15 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*sprites.ExitError); ok {
+			fmt.Printf("    [debug] cleanup exit code: %d\n", exitErr.ExitCode())
+		} else {
+			fmt.Printf("    [debug] cleanup error: %v\n", err)
+		}
+	}
+	return err
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

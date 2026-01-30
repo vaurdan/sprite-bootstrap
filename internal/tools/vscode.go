@@ -336,31 +336,36 @@ func (v *VSCode) Instructions(opts SetupOptions) string {
 	binary := findVSCodeBinary()
 	if binary != "" {
 		// Check if Claude Code extension is already installed on remote
+		installClaudeCode := false
 		if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
 			// Not installed - ask user if they want to install it
-			if promptInstallClaudeCode() {
-				fmt.Printf("%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
-				if err := installRemoteExtension(binary, hostName, claudeCodeExtensionID); err != nil {
-					fmt.Printf("%s⚠%s Failed to install Claude Code extension: %v\n", ColorYellow, ColorReset, err)
-					fmt.Printf("   You can install it manually in VS Code: search for 'Claude Code' in Extensions\n")
-				} else {
-					fmt.Printf("%s✓%s Claude Code extension will be installed when VS Code connects\n", ColorGreen, ColorReset)
-				}
-			}
+			installClaudeCode = promptInstallClaudeCode()
 		}
 
-		// Now launch VS Code
+		// Launch VS Code
 		if err := launchVSCode(binary, opts); err == nil {
-			return fmt.Sprintf(`
+			msg := fmt.Sprintf(`
 %s%s✓ VS Code Remote Development Ready!%s
 
 %sOpening:%s %s:%s
+`, ColorBold, ColorGreen, ColorReset,
+				ColorCyan, ColorReset, hostName, opts.RemotePath)
 
+			if installClaudeCode {
+				msg += fmt.Sprintf(`
+%sTo install Claude Code:%s
+  1. Wait for VS Code to connect to the remote
+  2. Open Extensions (Cmd+Shift+X / Ctrl+Shift+X)
+  3. Search for "Claude Code" and click Install
+`, ColorYellow, ColorReset)
+			}
+
+			msg += fmt.Sprintf(`
 If VS Code doesn't connect, try manually:
   %scode --remote ssh-remote+%s %s%s
-`, ColorBold, ColorGreen, ColorReset,
-				ColorCyan, ColorReset, hostName, opts.RemotePath,
-				ColorYellow, hostName, opts.RemotePath, ColorReset)
+`, ColorYellow, hostName, opts.RemotePath, ColorReset)
+
+			return msg
 		}
 	}
 

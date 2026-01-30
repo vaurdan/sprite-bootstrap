@@ -174,9 +174,8 @@ func fallbackKeyringPath(service, key string) (string, error) {
 		return "", err
 	}
 
-	// keys are stored at ~/.sprite/keyring/service/key
-	// note that this is .sprite (singular), not .sprites (the config directory)
-	keyringPath := filepath.Join(homeDir, ".sprite", "keyring")
+	// keys are stored at ~/.sprites/keyring/service/key
+	keyringPath := filepath.Join(homeDir, ".sprites", "keyring")
 	servicePath := filepath.Join(keyringPath, strings.ReplaceAll(service, ":", "-"))
 	keyPath := filepath.Join(servicePath, strings.ReplaceAll(key, ":", "-"))
 

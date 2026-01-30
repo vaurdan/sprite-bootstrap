@@ -167,6 +167,9 @@ func StartServe(port int) error {
 	}
 
 	cmd := exec.Command(executable, "serve", "-l", fmt.Sprintf(":%d", port))
+	// Inherit stdin so sprites-go SDK can detect TTY for proper PTY handling
+	// Without this, Zed's terminal has input echo issues
+	cmd.Stdin = os.Stdin
 	setSysProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {

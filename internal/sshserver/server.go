@@ -468,7 +468,8 @@ func (s *session) runCommand(ctx context.Context, command string) error {
 	cmd.Env = s.env
 	if s.tty {
 		cmd.SetTTY(true)
-		cmd.SetTTYSize(uint16(s.win.Cols), uint16(s.win.Rows))
+		// SetTTYSize takes (rows, cols) not (cols, rows)
+		cmd.SetTTYSize(uint16(s.win.Rows), uint16(s.win.Cols))
 
 		winCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -512,9 +513,10 @@ func (s *session) listenForWindowChange(ctx context.Context, cmd *sprites.Cmd) e
 		s.cond.Wait()
 		if err := ctx.Err(); err != nil {
 			return err
-		} else if err := cmd.SetTTYSize(uint16(s.win.Cols), uint16(s.win.Rows)); err != nil {
+		}
+		// SetTTYSize takes (rows, cols) not (cols, rows)
+		if err := cmd.SetTTYSize(uint16(s.win.Rows), uint16(s.win.Cols)); err != nil {
 			return err
 		}
-		slog.DebugContext(ctx, "Applied window change")
 	}
 }

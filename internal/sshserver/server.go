@@ -663,12 +663,16 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
-	// Note: We use sudo without --login to avoid double-login-shell issues
-	// The bash -l handles login shell sourcing; sudo --login would interfere
-	cmd := s.sprite.CommandContext(
-		ctx, "/usr/bin/sudo", "--user=sprite",
-		"/bin/bash", "-l", "-c", command,
-	)
+	// Run command directly via sprites SDK, matching how sprite CLI does it
+	// The sprite-console script handles shell setup and environment
+	var cmd *sprites.Cmd
+	if command == "" || command == "/.sprite/bin/sprite-console" {
+		// Interactive shell - run sprite-console directly
+		cmd = s.sprite.CommandContext(ctx, "/.sprite/bin/sprite-console")
+	} else {
+		// Execute command via bash for proper shell expansion
+		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)
+	}
 
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()
 	cmd.Env = s.env

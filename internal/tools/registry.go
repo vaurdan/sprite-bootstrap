@@ -97,9 +97,11 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 
 	// Wake up the sprite first (it might be in warm/sleep state)
 	fmt.Printf("%s⏳%s Waking sprite %s%s%s...\n", ColorYellow, ColorReset, ColorCyan, opts.SpriteName, ColorReset)
-	if err := wakeSprite(ctx, opts); err != nil {
+	sprite, err := wakeSprite(ctx, opts)
+	if err != nil {
 		return fmt.Errorf("failed to wake sprite: %w", err)
 	}
+	opts.Sprite = sprite
 	fmt.Printf("%s✓%s Sprite ready\n", ColorGreen, ColorReset)
 
 	// Ensure serve is running
@@ -125,13 +127,14 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 }
 
 // wakeSprite sends a simple command to wake up a sprite from warm/sleep state
-func wakeSprite(ctx context.Context, opts SetupOptions) error {
+// Returns the sprite instance for use in subsequent operations
+func wakeSprite(ctx context.Context, opts SetupOptions) (*sprites.Sprite, error) {
 	// Resolve token from sprites config
 	tokenOpts := &sshserver.TokenOptions{
 		Organization: opts.OrgName,
 	}
 	if err := tokenOpts.Resolve(); err != nil {
-		return fmt.Errorf("failed to resolve sprites credentials: %w\nRun 'sprite login' first", err)
+		return nil, fmt.Errorf("failed to resolve sprites credentials: %w\nRun 'sprite login' first", err)
 	}
 
 	// Create sprites client
@@ -140,7 +143,7 @@ func wakeSprite(ctx context.Context, opts SetupOptions) error {
 	// Get the sprite
 	sprite, err := client.GetSprite(ctx, opts.SpriteName)
 	if err != nil {
-		return fmt.Errorf("sprite not found: %s", opts.SpriteName)
+		return nil, fmt.Errorf("sprite not found: %s", opts.SpriteName)
 	}
 
 	// Run a simple command to wake it up
@@ -153,10 +156,10 @@ func wakeSprite(ctx context.Context, opts SetupOptions) error {
 	cmd.Stderr = io.Discard
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to wake sprite: %w", err)
+		return nil, fmt.Errorf("failed to wake sprite: %w", err)
 	}
 
-	return nil
+	return sprite, nil
 }
 
 // NewSetupOptions creates SetupOptions from common parameters

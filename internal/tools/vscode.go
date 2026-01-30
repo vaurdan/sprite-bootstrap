@@ -232,7 +232,35 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		fmt.Printf("%s⚠%s Failed to add SSH config: %v\n", ColorYellow, ColorReset, err)
 	}
 
+	// Kill any existing VS Code server processes on the sprite to ensure clean connection
+	if opts.Sprite != nil {
+		fmt.Printf("%s⏳%s Cleaning up existing VS Code server...\n", ColorYellow, ColorReset)
+		if err := cleanupVSCodeServer(ctx, opts.Sprite); err != nil {
+			// Non-fatal - just log the warning
+			fmt.Printf("%s⚠%s Failed to cleanup VS Code server: %v\n", ColorYellow, ColorReset, err)
+		} else {
+			fmt.Printf("%s✓%s VS Code server cleaned up\n", ColorGreen, ColorReset)
+		}
+	}
+
 	return nil
+}
+
+// cleanupVSCodeServer kills any existing VS Code server processes on the sprite
+func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Kill VS Code server and related processes
+	// Using pkill with multiple patterns to catch all VS Code related processes
+	cmd := sprite.CommandContext(cleanupCtx,
+		"/bin/bash", "-c",
+		"pkill -f 'vscode-server' 2>/dev/null; pkill -f '\\.vscode-server' 2>/dev/null; pkill -f 'code-server' 2>/dev/null; true",
+	)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	return cmd.Run()
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

@@ -36,4 +36,5 @@ type SetupOptions struct {
 	OrgName    string
 	LocalPort  int
 	RemotePath string // Path on the sprite (e.g., /home/sprite or /home/sprite/myproject)
+	Sprite     *sprites.Sprite // The sprite instance for running remote commands
 }

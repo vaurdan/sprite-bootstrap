@@ -7,18 +7,23 @@ package sshserver
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base32"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	mrand "math/rand"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/superfly/sprites-go"
 	"golang.org/x/crypto/ssh"
 )
@@ -53,6 +58,10 @@ type Server struct {
 	client        *sprites.Client
 	maxRetries    int
 
+	// authToken and apiURL for direct proxy connections
+	authToken string
+	apiURL    string
+
 	// sprites stores authenticated sprites by "user@remoteaddr"
 	sprites sync.Map
 
@@ -76,6 +85,8 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	s := &Server{
 		client:     client,
 		maxRetries: cfg.MaxRetries,
+		authToken:  cfg.TokenOptions.AuthToken,
+		apiURL:     cfg.TokenOptions.API,
 		listeners:  make(map[net.Listener]struct{}),
 		cancel:     cancel,
 	}
@@ -200,6 +211,10 @@ type sshConn struct {
 	wg   sync.WaitGroup
 
 	maxSpriteRetries int
+
+	// For direct-tcpip proxy connections
+	authToken string
+	apiURL    string
 }
 
 func (c *sshConn) Close() error {
@@ -219,7 +234,12 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 		return
 	}
 
-	c := &sshConn{conn: newConn, maxSpriteRetries: maxSpriteRetries}
+	c := &sshConn{
+		conn:             newConn,
+		maxSpriteRetries: maxSpriteRetries,
+		authToken:        srv.authToken,
+		apiURL:           srv.apiURL,
+	}
 	defer c.Wait()
 
 	// Get the sprite that was stored during authentication
@@ -306,6 +326,18 @@ type directTCPIPChannelData struct {
 	OriginPort uint32
 }
 
+// proxyInitMessage is the initial message sent to establish a proxy
+type proxyInitMessage struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+// proxyResponseMessage is the response from establishing a proxy
+type proxyResponseMessage struct {
+	Status string `json:"status"`
+	Target string `json:"target"`
+}
+
 // handleDirectTCPIP handles direct-tcpip channel requests for TCP port forwarding
 func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, sprite *sprites.Sprite) {
 	c.wg.Add(1)
@@ -332,39 +364,142 @@ func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, s
 	// Discard any channel requests
 	go ssh.DiscardRequests(reqs)
 
-	// Forward TCP connection through the sprite using socat or nc
-	// Run as sprite user like we do for sessions
-	// Note: direct-tcpip channels don't support extended data (stderr),
-	// so we discard stderr to avoid "bad ext data" errors
 	dest := fmt.Sprintf("%s:%d", channelData.DestAddr, channelData.DestPort)
+	slog.InfoContext(ctx, "Starting direct-tcpip forward via WebSocket proxy", "dest", dest)
 
-	slog.InfoContext(ctx, "Starting direct-tcpip forward", "dest", dest)
-
-	// Use socat for reliable bidirectional forwarding
-	// Falls back to nc if socat isn't available
-	forwardCmd := fmt.Sprintf(
-		"socat - TCP:%s:%d 2>/dev/null || nc %s %d",
-		channelData.DestAddr, channelData.DestPort,
-		channelData.DestAddr, channelData.DestPort,
-	)
-	cmd := sprite.CommandContext(
-		ctx, "/usr/bin/sudo", "--user=sprite", "--login",
-		"/bin/bash", "-c", forwardCmd,
-	)
-	cmd.Stdin = ch
-	cmd.Stdout = ch
-	cmd.Stderr = nil // Discard stderr - direct-tcpip doesn't support extended data
-
-	if err := cmd.Start(); err != nil {
-		slog.ErrorContext(ctx, "Failed to start direct-tcpip forward", "dest", dest, "exception", err)
+	// Build WebSocket URL for the proxy endpoint
+	wsURL, err := c.buildProxyURL(sprite.Name())
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to build proxy URL", "exception", err)
 		return
 	}
 
-	if err := cmd.Wait(); err != nil {
-		slog.DebugContext(ctx, "direct-tcpip forward ended", "dest", dest, "exception", err)
-	} else {
-		slog.DebugContext(ctx, "direct-tcpip forward completed", "dest", dest)
+	// Set up WebSocket dialer
+	dialer := &websocket.Dialer{
+		ReadBufferSize:  1024 * 1024,
+		WriteBufferSize: 1024 * 1024,
 	}
+	if wsURL.Scheme == "wss" {
+		dialer.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: false,
+		}
+	}
+
+	// Set headers including auth
+	header := http.Header{}
+	header.Set("Authorization", fmt.Sprintf("Bearer %s", c.authToken))
+	header.Set("User-Agent", "sprite-bootstrap/1.0")
+
+	// Connect to WebSocket
+	wsConn, _, err := dialer.DialContext(ctx, wsURL.String(), header)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to connect to proxy WebSocket", "dest", dest, "exception", err)
+		return
+	}
+	defer wsConn.Close()
+
+	// Send initialization message with destination host and port
+	host := channelData.DestAddr
+	if host == "" {
+		host = "localhost"
+	}
+	initMsg := proxyInitMessage{
+		Host: host,
+		Port: int(channelData.DestPort),
+	}
+
+	if err := wsConn.WriteJSON(&initMsg); err != nil {
+		slog.ErrorContext(ctx, "Failed to send proxy init message", "dest", dest, "exception", err)
+		return
+	}
+
+	// Read response
+	var response proxyResponseMessage
+	if err := wsConn.ReadJSON(&response); err != nil {
+		slog.ErrorContext(ctx, "Failed to read proxy response", "dest", dest, "exception", err)
+		return
+	}
+
+	if response.Status != "connected" {
+		slog.ErrorContext(ctx, "Proxy connection failed", "dest", dest, "status", response.Status)
+		return
+	}
+
+	slog.InfoContext(ctx, "Proxy connection established", "dest", dest, "target", response.Target)
+
+	// Start bidirectional copy between SSH channel and WebSocket
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Copy from SSH channel to WebSocket
+	go func() {
+		defer wg.Done()
+		defer wsConn.Close()
+
+		buffer := make([]byte, 32*1024)
+		for {
+			n, err := ch.Read(buffer)
+			if err != nil {
+				if err != io.EOF {
+					slog.DebugContext(ctx, "SSH channel read error", "exception", err)
+				}
+				return
+			}
+
+			if err := wsConn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+				slog.DebugContext(ctx, "WebSocket write error", "exception", err)
+				return
+			}
+		}
+	}()
+
+	// Copy from WebSocket to SSH channel
+	go func() {
+		defer wg.Done()
+		defer ch.Close()
+
+		for {
+			messageType, data, err := wsConn.ReadMessage()
+			if err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					slog.DebugContext(ctx, "WebSocket read error", "exception", err)
+				}
+				return
+			}
+
+			// Only forward binary messages
+			if messageType == websocket.BinaryMessage {
+				if _, err := ch.Write(data); err != nil {
+					slog.DebugContext(ctx, "SSH channel write error", "exception", err)
+					return
+				}
+			}
+		}
+	}()
+
+	wg.Wait()
+	slog.DebugContext(ctx, "direct-tcpip forward completed", "dest", dest)
+}
+
+// buildProxyURL builds the WebSocket URL for the proxy endpoint
+func (c *sshConn) buildProxyURL(spriteName string) (*url.URL, error) {
+	baseURL := c.apiURL
+
+	// Convert HTTP(S) to WS(S)
+	if strings.HasPrefix(baseURL, "http") {
+		baseURL = "ws" + baseURL[4:]
+	}
+
+	// Parse base URL
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+
+	// Build path
+	u.Path = fmt.Sprintf("/v1/sprites/%s/proxy", spriteName)
+
+	return u, nil
 }
 
 func (c *sshConn) handleSession(ctx context.Context, newCh ssh.NewChannel, sprite *sprites.Sprite) {

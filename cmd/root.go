@@ -16,7 +16,14 @@ var (
 	orgName    string
 	localPort  int
 	remotePath string
+	version    = "dev"
 )
+
+// SetVersion sets the version string for the CLI
+func SetVersion(v string) {
+	version = v
+	rootCmd.Version = v
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "sprite-bootstrap",

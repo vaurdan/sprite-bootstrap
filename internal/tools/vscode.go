@@ -26,18 +26,15 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 
 func (v *VSCode) Instructions(opts SetupOptions) string {
 	return fmt.Sprintf(`
-VS Code Remote Development Ready!
+%s%s✓ VS Code Remote Development Ready!%s
 
 1. Install the "Remote - SSH" extension in VS Code
 
 2. In VS Code:
    - Press Cmd+Shift+P (or Ctrl+Shift+P)
    - Type "Remote-SSH: Connect to Host"
-   - Enter: %s@localhost -p %d
-
-Or connect via SSH:
-  ssh %s@localhost -p %d
-`, opts.SpriteName, opts.LocalPort, opts.SpriteName, opts.LocalPort)
+   - Enter: %s%s@localhost -p %d%s
+`, ColorBold, ColorGreen, ColorReset, ColorYellow, opts.SpriteName, opts.LocalPort, ColorReset)
 }
 
 func (v *VSCode) Validate(ctx context.Context) error {

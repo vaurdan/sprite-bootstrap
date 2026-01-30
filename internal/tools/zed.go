@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/superfly/sprites-go"
 )
+
 
 func init() {
 	Register(&Zed{})
@@ -114,6 +116,7 @@ func configureZedAgentSettings(ctx context.Context, opts SetupOptions) error {
 	catCmd := sprite.CommandContext(setupCtx, "cat", settingsPath)
 	var stdout bytes.Buffer
 	catCmd.Stdout = &stdout
+	catCmd.Stderr = io.Discard // Suppress "No such file" error on first run
 	if err := catCmd.Run(); err == nil && stdout.Len() > 0 {
 		// Try to parse existing settings
 		if err := json.Unmarshal(stdout.Bytes(), &existingSettings); err != nil {
@@ -123,19 +126,16 @@ func configureZedAgentSettings(ctx context.Context, opts SetupOptions) error {
 		existingSettings = make(map[string]any)
 	}
 
-	// Check if agent settings already exist
-	if _, hasAgent := existingSettings["agent"]; hasAgent {
+	// Check if agent_servers already configured
+	if _, hasAgentServers := existingSettings["agent_servers"]; hasAgentServers {
 		// Don't overwrite user's agent configuration
 		return nil
 	}
 
-	// Add agent configuration for Zed's built-in Claude support
-	// This enables the agent panel and uses Claude via Zed's integration
-	existingSettings["agent"] = map[string]any{
-		"default_profile": "claude",
-		"profiles": map[string]any{
-			"claude": map[string]any{},
-		},
+	// Configure agent_servers to use Claude Code (pre-installed on sprites)
+	// See: https://zed.dev/docs/ai/external-agents
+	existingSettings["agent_servers"] = map[string]any{
+		"claude": map[string]any{},
 	}
 
 	// Write updated settings
@@ -152,7 +152,7 @@ func configureZedAgentSettings(ctx context.Context, opts SetupOptions) error {
 		return nil // Non-fatal
 	}
 
-	fmt.Println("Configured Zed agent settings on sprite")
+	fmt.Printf("%s✓%s Configured Zed agent settings\n", ColorGreen, ColorReset)
 	return nil
 }
 
@@ -163,33 +163,24 @@ func (z *Zed) Instructions(opts SetupOptions) string {
 	if zedCmd, useShell := findZedBinary(); zedCmd != "" {
 		if err := launchZed(zedCmd, useShell, sshURL); err == nil {
 			return fmt.Sprintf(`
-Zed Remote Development Ready!
+%s%s✓ Zed Remote Development Ready!%s
 
-Opening Zed with: %s
+%sOpening:%s %s
 
 If Zed doesn't open, connect manually:
-  zed %s
-
-Agent: Zed's agent panel is pre-configured. Open it with cmd+shift+a (macOS) or ctrl+shift+a.
-
-Tip: Set ZED_PATH environment variable if Zed isn't detected.
-`, sshURL, sshURL)
+  %szed %s%s
+`, ColorBold, ColorGreen, ColorReset, ColorCyan, ColorReset, sshURL, ColorYellow, sshURL, ColorReset)
 		}
 	}
 
 	return fmt.Sprintf(`
-Zed Remote Development Ready!
+%s%s✓ Zed Remote Development Ready!%s
 
-Open Zed and connect to:
-  %s
+%sConnect to:%s %s
 
 Or run:
-  zed %s
-
-Agent: Zed's agent panel is pre-configured. Open it with cmd+shift+a (macOS) or ctrl+shift+a.
-
-Tip: Set ZED_PATH=/path/to/zed if your Zed isn't detected.
-`, sshURL, sshURL)
+  %szed %s%s
+`, ColorBold, ColorGreen, ColorReset, ColorCyan, ColorReset, sshURL, ColorYellow, sshURL, ColorReset)
 }
 
 func (z *Zed) Validate(ctx context.Context) error {

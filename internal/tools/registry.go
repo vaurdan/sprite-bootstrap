@@ -17,6 +17,15 @@ import (
 	"github.com/superfly/sprites-go"
 )
 
+// ANSI color codes for terminal output
+const (
+	ColorReset  = "\033[0m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorCyan   = "\033[36m"
+	ColorBold   = "\033[1m"
+)
+
 // registry holds all registered tools
 var registry = make(map[string]Tool)
 
@@ -52,24 +61,22 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	fmt.Printf("Setting up %s remote development...\n", tool.Name())
-
 	// Wake up the sprite first (it might be in warm/sleep state)
-	fmt.Printf("Waking up sprite %s...\n", opts.SpriteName)
+	fmt.Printf("%s⏳%s Waking sprite %s%s%s...\n", ColorYellow, ColorReset, ColorCyan, opts.SpriteName, ColorReset)
 	if err := wakeSprite(ctx, opts); err != nil {
 		return fmt.Errorf("failed to wake sprite: %w", err)
 	}
-	fmt.Println("Sprite is ready")
+	fmt.Printf("%s✓%s Sprite ready\n", ColorGreen, ColorReset)
 
 	// Ensure serve is running
 	if !IsServeRunning() {
-		fmt.Println("Starting SSH server...")
+		fmt.Printf("%s⏳%s Starting SSH server...\n", ColorYellow, ColorReset)
 		if err := StartServe(opts.LocalPort); err != nil {
 			return fmt.Errorf("failed to start SSH server: %w", err)
 		}
-		fmt.Printf("SSH server started on port %d\n", opts.LocalPort)
+		fmt.Printf("%s✓%s SSH server listening on port %d\n", ColorGreen, ColorReset, opts.LocalPort)
 	} else {
-		fmt.Printf("SSH server already running on port %d\n", opts.LocalPort)
+		fmt.Printf("%s✓%s SSH server listening on port %d\n", ColorGreen, ColorReset, opts.LocalPort)
 	}
 
 	// Tool-specific setup

@@ -332,17 +332,23 @@ func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, s
 	// Discard any channel requests
 	go ssh.DiscardRequests(reqs)
 
-	// Use netcat on the sprite to forward the connection
-	// This connects to the destination host:port on the sprite's network
+	// Forward TCP connection through the sprite using bash /dev/tcp
+	// This is more portable than netcat and works on most Linux systems
 	// Note: direct-tcpip channels don't support extended data (stderr),
 	// so we discard stderr to avoid "bad ext data" errors
-	cmd := sprite.CommandContext(ctx, "nc", channelData.DestAddr, fmt.Sprintf("%d", channelData.DestPort))
+	forwardCmd := fmt.Sprintf(
+		"exec 3<>/dev/tcp/%s/%d; cat <&3 & cat >&3; wait",
+		channelData.DestAddr, channelData.DestPort,
+	)
+	cmd := sprite.CommandContext(ctx, "/bin/bash", "-c", forwardCmd)
 	cmd.Stdin = ch
 	cmd.Stdout = ch
 	cmd.Stderr = nil // Discard stderr - direct-tcpip doesn't support extended data
 
 	if err := cmd.Run(); err != nil {
-		slog.DebugContext(ctx, "direct-tcpip forward ended", "exception", err)
+		slog.DebugContext(ctx, "direct-tcpip forward ended",
+			"dest", fmt.Sprintf("%s:%d", channelData.DestAddr, channelData.DestPort),
+			"exception", err)
 	}
 }
 

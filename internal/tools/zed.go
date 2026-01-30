@@ -109,7 +109,7 @@ func cleanupStaleZedState(ctx context.Context, opts SetupOptions) {
 }
 
 func (z *Zed) Instructions(opts SetupOptions) string {
-	sshURL := fmt.Sprintf("ssh://%s@localhost:%d/home/sprite", opts.SpriteName, opts.LocalPort)
+	sshURL := fmt.Sprintf("ssh://%s@localhost:%d%s", opts.SpriteName, opts.LocalPort, opts.RemotePath)
 
 	// Try to launch Zed
 	if zedCmd, useShell := findZedBinary(); zedCmd != "" {

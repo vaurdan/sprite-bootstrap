@@ -160,11 +160,12 @@ func wakeSprite(ctx context.Context, opts SetupOptions) error {
 }
 
 // NewSetupOptions creates SetupOptions from common parameters
-func NewSetupOptions(spriteName, orgName string, localPort int) SetupOptions {
+func NewSetupOptions(spriteName, orgName string, localPort int, remotePath string) SetupOptions {
 	return SetupOptions{
 		SpriteName: spriteName,
 		OrgName:    orgName,
 		LocalPort:  localPort,
+		RemotePath: remotePath,
 	}
 }
 

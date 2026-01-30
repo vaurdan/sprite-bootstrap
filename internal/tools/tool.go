@@ -35,4 +35,5 @@ type SetupOptions struct {
 	SpriteName string
 	OrgName    string
 	LocalPort  int
+	RemotePath string // Path on the sprite (e.g., /home/sprite or /home/sprite/myproject)
 }

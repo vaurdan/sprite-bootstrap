@@ -520,6 +520,12 @@ func (c *sshConn) handleSession(ctx context.Context, newCh ssh.NewChannel, sprit
 		ch:     ch,
 		cancel: cancel,
 		cond:   sync.NewCond(new(sync.Mutex)),
+		// Set default environment variables for all sessions
+		env: []string{
+			"SHELL=/bin/bash",
+			"LANG=en_US.UTF-8",
+			"LC_ALL=en_US.UTF-8",
+		},
 	}
 
 	for {

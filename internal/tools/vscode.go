@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/superfly/sprites-go"
 )
@@ -28,6 +29,7 @@ func (v *VSCode) Description() string {
 }
 
 const remoteSSHExtensionID = "ms-vscode-remote.remote-ssh"
+const claudeCodeExtensionID = "anthropic.claude-code"
 
 // Markers for our managed SSH config entries
 const (
@@ -62,9 +64,18 @@ func hasExtension(binary, extensionID string) bool {
 	return false
 }
 
-// installExtension installs a VS Code extension
+// installExtension installs a VS Code extension locally
 func installExtension(binary, extensionID string) error {
 	cmd := exec.Command(binary, "--install-extension", extensionID)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// installRemoteExtension installs a VS Code extension on a remote host
+func installRemoteExtension(binary, remoteHost, extensionID string) error {
+	remoteArg := fmt.Sprintf("ssh-remote+%s", remoteHost)
+	cmd := exec.Command(binary, "--remote", remoteArg, "--install-extension", extensionID)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -230,6 +241,20 @@ func (v *VSCode) Instructions(opts SetupOptions) string {
 	binary := findVSCodeBinary()
 	if binary != "" {
 		if err := launchVSCode(binary, opts); err == nil {
+			// Install Claude Code extension on the remote in the background
+			// Wait a bit for the SSH connection to establish first
+			go func() {
+				time.Sleep(5 * time.Second)
+				fmt.Printf("\n%s⏳%s Installing Claude Code extension on remote...\n", ColorYellow, ColorReset)
+				if err := installRemoteExtension(binary, hostName, claudeCodeExtensionID); err != nil {
+					fmt.Printf("%s⚠%s Failed to install Claude Code extension: %v\n", ColorYellow, ColorReset, err)
+					fmt.Printf("   You can install it manually: %scode --remote ssh-remote+%s --install-extension %s%s\n",
+						ColorYellow, hostName, claudeCodeExtensionID, ColorReset)
+				} else {
+					fmt.Printf("%s✓%s Claude Code extension installed on remote\n", ColorGreen, ColorReset)
+				}
+			}()
+
 			return fmt.Sprintf(`
 %s%s✓ VS Code Remote Development Ready!%s
 
@@ -256,10 +281,14 @@ If VS Code doesn't connect, try manually:
    - Press Cmd+Shift+P (or Ctrl+Shift+P)
    - Type "Remote-SSH: Connect to Host"
    - Select: %s%s%s
+
+3. Install Claude Code on the remote:
+   %scode --remote ssh-remote+%s --install-extension %s%s
 `, ColorBold, ColorGreen, ColorReset,
 		ColorYellow, remoteSSHExtensionID, ColorReset,
 		ColorYellow, hostName, opts.RemotePath, ColorReset,
-		ColorYellow, hostName, ColorReset)
+		ColorYellow, hostName, ColorReset,
+		ColorYellow, hostName, claudeCodeExtensionID, ColorReset)
 }
 
 func (v *VSCode) Validate(ctx context.Context) error {

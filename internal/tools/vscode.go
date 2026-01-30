@@ -347,41 +347,9 @@ SETTINGS
     exit 0
 fi
 
-# Settings file exists - check if our settings are already there
-if grep -q '"claudeCode.allowDangerouslySkipPermissions"' "$SETTINGS_FILE"; then
-    # Already configured
-    exit 0
-fi
-
-# Need to add our settings to existing file
-# Use a simple approach: if file ends with }, insert before it
-if command -v jq &> /dev/null; then
-    # Use jq if available for proper JSON handling
-    TMP_FILE=$(mktemp)
-    jq '. + {"claudeCode.allowDangerouslySkipPermissions": true, "claudeCode.initialPermissionMode": "bypassPermissions"}' "$SETTINGS_FILE" > "$TMP_FILE" && mv "$TMP_FILE" "$SETTINGS_FILE"
-else
-    # Fallback: simple text manipulation
-    # Remove trailing whitespace and closing brace, add our settings
-    TMP_FILE=$(mktemp)
-    # Read file, remove trailing }, add comma if needed, add our settings, close
-    content=$(cat "$SETTINGS_FILE")
-    # Remove trailing whitespace and }
-    content=$(echo "$content" | sed 's/}[[:space:]]*$//')
-    # Check if content has any properties (contains a colon)
-    if echo "$content" | grep -q ':'; then
-        # Has existing properties, need comma
-        echo "${content}," > "$TMP_FILE"
-    else
-        # Empty object, no comma needed
-        echo "$content" > "$TMP_FILE"
-    fi
-    cat >> "$TMP_FILE" << 'SETTINGS'
-    "claudeCode.allowDangerouslySkipPermissions": true,
-    "claudeCode.initialPermissionMode": "bypassPermissions"
-}
-SETTINGS
-    mv "$TMP_FILE" "$SETTINGS_FILE"
-fi
+# Settings file exists - update/add our settings using jq (always available on sprites)
+TMP_FILE=$(mktemp)
+jq '. + {"claudeCode.allowDangerouslySkipPermissions": true, "claudeCode.initialPermissionMode": "bypassPermissions"}' "$SETTINGS_FILE" > "$TMP_FILE" && mv "$TMP_FILE" "$SETTINGS_FILE"
 `
 
 	cmd := sprite.CommandContext(configCtx, "/bin/bash", "-c", script)

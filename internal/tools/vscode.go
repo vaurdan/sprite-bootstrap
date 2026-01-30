@@ -235,16 +235,6 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		fmt.Printf("%s⚠%s Failed to add SSH config: %v\n", ColorYellow, ColorReset, err)
 	}
 
-	// Kill any existing VS Code server processes on the sprite to ensure clean connection
-	// But ask first since the user might have VS Code already connected
-	if opts.Sprite != nil && shouldCleanupVSCodeServer() {
-		fmt.Printf("%s⏳%s Cleaning up existing VS Code server...\n", ColorYellow, ColorReset)
-		if err := cleanupVSCodeServer(ctx, opts.Sprite); err != nil {
-			fmt.Printf("%s✓%s VS Code server cleanup done (note: %v)\n", ColorGreen, ColorReset, err)
-		} else {
-			fmt.Printf("%s✓%s VS Code server cleanup done\n", ColorGreen, ColorReset)
-		}
-	}
 
 	return nil
 }
@@ -381,45 +371,6 @@ func promptInstallClaudeCode() bool {
 	default:
 		return false
 	}
-}
-
-// shouldCleanupVSCodeServer asks the user if they want to cleanup existing VS Code server
-func shouldCleanupVSCodeServer() bool {
-	var cleanup bool
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Kill existing VS Code server on sprite?").
-				Description("Choose 'No' if you have VS Code already connected").
-				Affirmative("Yes").
-				Negative("No").
-				Value(&cleanup),
-		),
-	)
-
-	err := form.Run()
-	if err != nil {
-		return false
-	}
-	return cleanup
-}
-
-// cleanupVSCodeServer kills any existing VS Code server processes on the sprite
-func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
-	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// Kill VS Code server and related processes
-	// Use pgrep to find PIDs first, then kill them - this avoids pkill killing itself
-	// (pkill -f 'vscode-server' would match its own command line containing that string)
-	cmd := sprite.CommandContext(cleanupCtx,
-		"/bin/bash", "-c",
-		"pids=$(pgrep -f '[v]scode-server' 2>/dev/null); [ -n \"$pids\" ] && kill $pids 2>/dev/null; true",
-	)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	return cmd.Run()
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

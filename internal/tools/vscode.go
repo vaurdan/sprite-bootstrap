@@ -236,10 +236,10 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	}
 
 	// Kill any existing VS Code server processes on the sprite to ensure clean connection
-	if opts.Sprite != nil {
+	// But ask first since the user might have VS Code already connected
+	if opts.Sprite != nil && shouldCleanupVSCodeServer() {
 		fmt.Printf("%s⏳%s Cleaning up existing VS Code server...\n", ColorYellow, ColorReset)
 		if err := cleanupVSCodeServer(ctx, opts.Sprite); err != nil {
-			// Log for debugging but don't fail - cleanup is best effort
 			fmt.Printf("%s✓%s VS Code server cleanup done (note: %v)\n", ColorGreen, ColorReset, err)
 		} else {
 			fmt.Printf("%s✓%s VS Code server cleanup done\n", ColorGreen, ColorReset)
@@ -381,6 +381,27 @@ func promptInstallClaudeCode() bool {
 	default:
 		return false
 	}
+}
+
+// shouldCleanupVSCodeServer asks the user if they want to cleanup existing VS Code server
+func shouldCleanupVSCodeServer() bool {
+	var cleanup bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Kill existing VS Code server on sprite?").
+				Description("Choose 'No' if you have VS Code already connected").
+				Affirmative("Yes").
+				Negative("No").
+				Value(&cleanup),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		return false
+	}
+	return cleanup
 }
 
 // cleanupVSCodeServer kills any existing VS Code server processes on the sprite

@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/superfly/sprites-go"
+)
 
 // Tool defines the interface each IDE bootstrap module must implement
 type Tool interface {
@@ -18,6 +22,12 @@ type Tool interface {
 
 	// Validate checks if prerequisites are met (e.g., local IDE installed)
 	Validate(ctx context.Context) error
+}
+
+// Cleaner is an optional interface for tools that need cleanup on stop
+type Cleaner interface {
+	// Cleanup removes tool-specific state from the sprite
+	Cleanup(ctx context.Context, sprite *sprites.Sprite) error
 }
 
 // SetupOptions contains configuration for setting up a tool

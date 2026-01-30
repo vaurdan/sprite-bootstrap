@@ -138,3 +138,25 @@ Or run:
 func (z *Zed) Validate(ctx context.Context) error {
 	return nil
 }
+
+// Cleanup implements the Cleaner interface for Zed
+func (z *Zed) Cleanup(ctx context.Context, sprite *sprites.Sprite) error {
+	cleanupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Kill Zed remote server processes (both proxy and run processes)
+	cmd := sprite.CommandContext(cleanupCtx, "pkill", "-f", "zed-remote-server")
+	_ = cmd.Run() // Ignore errors - might not find any processes
+
+	// Clean up Zed server state directory (Unix sockets and PID files)
+	cmd = sprite.CommandContext(cleanupCtx, "rm", "-rf",
+		"/home/sprite/.local/share/zed/server_state")
+	_ = cmd.Run()
+
+	// Clean up old Zed server binaries in ~/.zed_server/
+	cmd = sprite.CommandContext(cleanupCtx, "bash", "-c",
+		`find ~/.zed_server -name 'zed-remote-server-*' -mtime +1 -delete 2>/dev/null || true`)
+	_ = cmd.Run()
+
+	return nil
+}

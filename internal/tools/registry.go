@@ -54,6 +54,40 @@ func Names() []string {
 	return names
 }
 
+// CleanupSprite runs cleanup for all registered tools that implement Cleaner
+func CleanupSprite(ctx context.Context, spriteName, orgName string) error {
+	// Resolve credentials
+	tokenOpts := &sshserver.TokenOptions{
+		Organization: orgName,
+	}
+	if err := tokenOpts.Resolve(); err != nil {
+		return fmt.Errorf("could not resolve credentials: %w", err)
+	}
+
+	// Connect to sprite
+	client := sprites.New(tokenOpts.AuthToken, sprites.WithBaseURL(tokenOpts.API))
+	sprite, err := client.GetSprite(ctx, spriteName)
+	if err != nil {
+		return fmt.Errorf("sprite not found: %s", spriteName)
+	}
+
+	// Run cleanup for all tools that implement Cleaner
+	for _, tool := range registry {
+		if cleaner, ok := tool.(Cleaner); ok {
+			fmt.Printf("%s⏳%s Cleaning up %s on %s%s%s...\n",
+				ColorYellow, ColorReset, tool.Name(), ColorCyan, spriteName, ColorReset)
+			if err := cleaner.Cleanup(ctx, sprite); err != nil {
+				fmt.Printf("%s⚠%s Failed to cleanup %s: %v\n",
+					ColorYellow, ColorReset, tool.Name(), err)
+			} else {
+				fmt.Printf("%s✓%s Cleaned up %s\n", ColorGreen, ColorReset, tool.Name())
+			}
+		}
+	}
+
+	return nil
+}
+
 // Bootstrap performs the common bootstrap sequence for any tool
 func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 	// Validate prerequisites

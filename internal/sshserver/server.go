@@ -457,11 +457,10 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
+	// Use bash -l (login shell) to ensure profile is sourced and PATH is set correctly
 	cmd := s.sprite.CommandContext(
-		ctx, "/usr/bin/sudo", "--user=sprite", "--login", "/bin/sh", "-c",
-		fmt.Sprintf(
-			`${SHELL:-/bin/bash} -c '%s'`, strings.ReplaceAll(command, `'`, `'"'"'`),
-		),
+		ctx, "/usr/bin/sudo", "--user=sprite", "--login",
+		"/bin/bash", "-l", "-c", command,
 	)
 
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()

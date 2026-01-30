@@ -235,9 +235,12 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	// Kill any existing VS Code server processes on the sprite to ensure clean connection
 	if opts.Sprite != nil {
 		fmt.Printf("%s⏳%s Cleaning up existing VS Code server...\n", ColorYellow, ColorReset)
-		// Best effort - don't warn on errors since cleanup is not critical
-		_ = cleanupVSCodeServer(ctx, opts.Sprite)
-		fmt.Printf("%s✓%s VS Code server cleanup done\n", ColorGreen, ColorReset)
+		if err := cleanupVSCodeServer(ctx, opts.Sprite); err != nil {
+			// Log for debugging but don't fail - cleanup is best effort
+			fmt.Printf("%s✓%s VS Code server cleanup done (note: %v)\n", ColorGreen, ColorReset, err)
+		} else {
+			fmt.Printf("%s✓%s VS Code server cleanup done\n", ColorGreen, ColorReset)
+		}
 	}
 
 	return nil
@@ -258,7 +261,16 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		// Log detailed error info for debugging
+		if exitErr, ok := err.(*sprites.ExitError); ok {
+			fmt.Printf("    [debug] cleanup exit code: %d\n", exitErr.ExitCode())
+		} else {
+			fmt.Printf("    [debug] cleanup error type: %T, msg: %v\n", err, err)
+		}
+	}
+	return err
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

@@ -39,6 +39,12 @@ var (
 
 var maxBackoffDuration = 10 * time.Second
 
+// SSH keepalive settings
+var (
+	keepaliveInterval = 30 * time.Second // Send keepalive every 30 seconds
+	keepaliveTimeout  = 15 * time.Second // Wait 15 seconds for response
+)
+
 // Bech32 alphabet for session IDs
 var bech32Encoding = base32.NewEncoding("qpzry9x8gf2tvdw0s3jn54khce6mua7l").
 	WithPadding(base32.NoPadding)
@@ -250,14 +256,20 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 		return
 	}
 
-	slog.InfoContext(ctx, "New SSH connection",
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
+	slog.InfoContext(connCtx, "New SSH connection",
 		"conn.addr", newConn.RemoteAddr().String(),
 		"conn.id", bech32Encoding.EncodeToString(newConn.SessionID()),
 		"sprite.name", sprite.Name())
 
+	// Start keepalive goroutine to detect dead connections
+	go c.keepalive(connCtx, connCancel)
+
 	for {
 		select {
-		case <-ctx.Done():
+		case <-connCtx.Done():
 			c.Close()
 			return
 		case newCh := <-chans:
@@ -267,9 +279,9 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 
 			switch newCh.ChannelType() {
 			case "session":
-				go c.handleSession(ctx, newCh, sprite)
+				go c.handleSession(connCtx, newCh, sprite)
 			case "direct-tcpip":
-				go c.handleDirectTCPIP(ctx, newCh, sprite)
+				go c.handleDirectTCPIP(connCtx, newCh, sprite)
 			default:
 				newCh.Reject(ssh.UnknownChannelType, "unknown channel type")
 			}
@@ -280,6 +292,42 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 
 			if req.WantReply {
 				req.Reply(false, nil)
+			}
+		}
+	}
+}
+
+// keepalive sends periodic keepalive requests to detect dead connections
+func (c *sshConn) keepalive(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Send keepalive request with timeout
+			done := make(chan bool, 1)
+			go func() {
+				// Request with WantReply=true to get a response
+				_, _, err := c.conn.SendRequest("keepalive@openssh.com", true, nil)
+				done <- (err == nil)
+			}()
+
+			select {
+			case ok := <-done:
+				if !ok {
+					slog.Debug("SSH keepalive failed, closing connection")
+					cancel()
+					return
+				}
+			case <-time.After(keepaliveTimeout):
+				slog.Debug("SSH keepalive timeout, closing connection")
+				cancel()
+				return
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -427,9 +475,38 @@ func (c *sshConn) handleDirectTCPIP(ctx context.Context, newCh ssh.NewChannel, s
 
 	slog.InfoContext(ctx, "Proxy connection established", "dest", dest, "target", response.Target)
 
+	// Set up WebSocket keepalive via ping/pong
+	wsConn.SetPongHandler(func(string) error {
+		// Extend read deadline on pong
+		wsConn.SetReadDeadline(time.Now().Add(keepaliveInterval + keepaliveTimeout))
+		return nil
+	})
+	// Set initial read deadline
+	wsConn.SetReadDeadline(time.Now().Add(keepaliveInterval + keepaliveTimeout))
+
 	// Start bidirectional copy between SSH channel and WebSocket
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3) // +1 for ping goroutine
+
+	// Ping goroutine to keep WebSocket alive
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(keepaliveInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := wsConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(keepaliveTimeout)); err != nil {
+					slog.DebugContext(ctx, "WebSocket ping failed", "exception", err)
+					wsConn.Close()
+					return
+				}
+			}
+		}
+	}()
 
 	// Copy from SSH channel to WebSocket
 	go func() {
@@ -656,8 +733,11 @@ func shouldRetry(err error) bool {
 	transientMessages := []string{
 		"connection refused",
 		"connection reset",
+		"connection reset by peer",
 		"no such host",
 		"i/o timeout",
+		"broken pipe",
+		"websocket: close",
 	}
 	errLower := strings.ToLower(err.Error())
 	for _, msg := range transientMessages {

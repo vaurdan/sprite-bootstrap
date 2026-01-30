@@ -584,14 +584,9 @@ func (s *session) handleReq(ctx context.Context, req *ssh.Request, maxSpriteRetr
 			return errDuplicatePTY
 		}
 
-		// Set terminal environment variables for proper shell/prompt setup
+		// Set terminal-specific environment variables
 		s.env = append(s.env, "TERM="+pr.Term)
-		// These help sprite-console set up the interactive shell properly
 		s.env = append(s.env, "COLORTERM=truecolor")
-		s.env = append(s.env, "LANG=en_US.UTF-8")
-		s.env = append(s.env, "LC_ALL=en_US.UTF-8")
-		// Tell sprite-console which shell to use
-		s.env = append(s.env, "SHELL=/bin/bash")
 		s.tty = true
 		s.setWindow(windowChangeRequest{pr.Cols, pr.Rows, pr.Width, pr.Height})
 
@@ -622,10 +617,6 @@ func (s *session) setWindow(win windowChangeRequest) {
 func (s *session) exec(ctx context.Context, command string, isShell bool, maxRetries int) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errAlreadyRunning
-	}
-
-	if command == "" {
-		command = "/.sprite/bin/sprite-console"
 	}
 
 	go func() {

@@ -309,37 +309,24 @@ func GetServePid() int {
 // testSSHConnection tests the SSH connection and accepts the host key fingerprint
 func testSSHConnection(ctx context.Context, opts SetupOptions) error {
 	// Use StrictHostKeyChecking=accept-new to automatically accept the host key
-	// on first connection, but reject if it changes later
-	cmd := exec.CommandContext(ctx, "ssh",
+	// on first connection and save it to known_hosts for subsequent connections (e.g., Zed)
+	sshArgs := []string{
 		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=30",
-		"-o", "BatchMode=yes",
 		"-p", strconv.Itoa(opts.LocalPort),
 		fmt.Sprintf("%s@localhost", opts.SpriteName),
 		"true",
-	)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	}
 
 	// Retry a few times in case the server is still spinning up
 	var lastErr error
 	for i := 0; i < 5; i++ {
+		cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
 		if err := cmd.Run(); err != nil {
 			lastErr = err
 			time.Sleep(500 * time.Millisecond)
-			// Recreate command for retry
-			cmd = exec.CommandContext(ctx, "ssh",
-				"-o", "StrictHostKeyChecking=accept-new",
-				"-o", "UserKnownHostsFile=/dev/null",
-				"-o", "ConnectTimeout=30",
-				"-o", "BatchMode=yes",
-				"-p", strconv.Itoa(opts.LocalPort),
-				fmt.Sprintf("%s@localhost", opts.SpriteName),
-				"true",
-			)
-			cmd.Stdout = nil
-			cmd.Stderr = nil
 			continue
 		}
 		return nil

@@ -260,7 +260,15 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	return cmd.Run()
+	err := cmd.Run()
+	// Exit status 143 (SIGTERM) is expected - it means pkill killed something
+	// which may have also terminated our connection
+	if err != nil {
+		if exitErr, ok := err.(*sprites.ExitError); ok && exitErr.ExitCode() == 143 {
+			return nil // This is expected
+		}
+	}
+	return err
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

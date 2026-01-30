@@ -235,12 +235,9 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	// Kill any existing VS Code server processes on the sprite to ensure clean connection
 	if opts.Sprite != nil {
 		fmt.Printf("%s⏳%s Cleaning up existing VS Code server...\n", ColorYellow, ColorReset)
-		if err := cleanupVSCodeServer(ctx, opts.Sprite); err != nil {
-			// Non-fatal - just log the warning
-			fmt.Printf("%s⚠%s Failed to cleanup VS Code server: %v\n", ColorYellow, ColorReset, err)
-		} else {
-			fmt.Printf("%s✓%s VS Code server cleaned up\n", ColorGreen, ColorReset)
-		}
+		// Best effort - don't warn on errors since cleanup is not critical
+		_ = cleanupVSCodeServer(ctx, opts.Sprite)
+		fmt.Printf("%s✓%s VS Code server cleanup done\n", ColorGreen, ColorReset)
 	}
 
 	return nil
@@ -253,6 +250,7 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 
 	// Kill VS Code server and related processes
 	// Using pkill with multiple patterns to catch all VS Code related processes
+	// The 'true' at the end ensures we return 0 even if no processes were found
 	cmd := sprite.CommandContext(cleanupCtx,
 		"/bin/bash", "-c",
 		"pkill -f 'vscode-server' 2>/dev/null; pkill -f '\\.vscode-server' 2>/dev/null; pkill -f 'code-server' 2>/dev/null; true",
@@ -260,15 +258,7 @@ func cleanupVSCodeServer(ctx context.Context, sprite *sprites.Sprite) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	err := cmd.Run()
-	// Exit status 143 (SIGTERM) is expected - it means pkill killed something
-	// which may have also terminated our connection
-	if err != nil {
-		if exitErr, ok := err.(*sprites.ExitError); ok && exitErr.ExitCode() == 143 {
-			return nil // This is expected
-		}
-	}
-	return err
+	return cmd.Run()
 }
 
 func (v *VSCode) Instructions(opts SetupOptions) string {

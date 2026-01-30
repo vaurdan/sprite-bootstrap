@@ -670,19 +670,18 @@ func shouldRetry(err error) bool {
 }
 
 func (s *session) runCommand(ctx context.Context, command string) error {
-	// Run command directly via sprites SDK
+	// Run command directly via sprites SDK, matching how sprite CLI does it
 	var cmd *sprites.Cmd
 	if command == "" || command == "/.sprite/bin/sprite-console" {
-		// Interactive shell - run bash -li directly for proper prompt
-		// sprite-console uses --login without -i, which doesn't source .bashrc
-		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-li")
+		// Interactive shell - run sprite-console directly
+		cmd = s.sprite.CommandContext(ctx, "/.sprite/bin/sprite-console")
 	} else {
 		// Execute command via bash for proper shell expansion
 		cmd = s.sprite.CommandContext(ctx, "/bin/bash", "-c", command)
 	}
 
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()
 	cmd.Env = s.env
+	// Set TTY before stdin/stdout to match sprite CLI behavior
 	if s.tty {
 		cmd.SetTTY(true)
 		// SetTTYSize takes (rows, cols) not (cols, rows)
@@ -692,6 +691,8 @@ func (s *session) runCommand(ctx context.Context, command string) error {
 		defer cancel()
 		go s.listenForWindowChange(winCtx, cmd)
 	}
+	// Set stdin/stdout/stderr after TTY setup
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.ch, s.ch, s.ch.Stderr()
 
 	if err := cmd.Start(); err != nil {
 		return err

@@ -267,6 +267,22 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 		fmt.Printf("%s⚠%s Failed to add SSH config: %v\n", ColorYellow, ColorReset, err)
 	}
 
+	// Clean up stale VS Code workspace state to prevent duplicate workspaces
+	if opts.Sprite != nil {
+		if err := cleanupStaleVSCodeState(ctx, opts.Sprite); err != nil {
+			// Non-fatal, just log
+			fmt.Printf("%s⚠%s Failed to clean up stale VS Code state: %v\n", ColorYellow, ColorReset, err)
+		}
+	}
+
+	// Fix Claude Code project path bug (VS Code extension adds trailing dash to path)
+	if opts.Sprite != nil {
+		if err := fixClaudeCodeProjectPaths(ctx, opts.Sprite); err != nil {
+			// Non-fatal, just log
+			fmt.Printf("%s⚠%s Failed to fix Claude Code project paths: %v\n", ColorYellow, ColorReset, err)
+		}
+	}
+
 	// Check if Claude Code extension is already installed on remote
 	if opts.Sprite != nil && !isClaudeCodeInstalledOnRemote(ctx, opts.Sprite) {
 		// Not installed - ask user if they want to install it
@@ -294,6 +310,106 @@ func (v *VSCode) Setup(ctx context.Context, opts SetupOptions) error {
 	}
 
 	return nil
+}
+
+// fixClaudeCodeProjectPaths works around a bug in the Claude Code VS Code extension
+// where it looks for project directories with a trailing dash (e.g., "-home-sprite-")
+// but the CLI creates them without the trailing dash (e.g., "-home-sprite").
+// This creates symlinks so the extension can find existing sessions.
+// See: https://github.com/anthropics/claude-code/issues/9258
+func fixClaudeCodeProjectPaths(ctx context.Context, sprite *sprites.Sprite) error {
+	if sprite == nil {
+		return fmt.Errorf("sprite is nil")
+	}
+
+	fixCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// For each project directory without a trailing dash,
+	// create a symlink with the trailing dash pointing to it
+	script := `
+set -e
+PROJECTS_DIR="$HOME/.claude/projects"
+
+if [ ! -d "$PROJECTS_DIR" ]; then
+    exit 0
+fi
+
+# Find all directories that don't end with a dash
+for dir in "$PROJECTS_DIR"/*; do
+    if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+        # Check if it doesn't already end with a dash
+        case "$dir" in
+            *-)
+                # Already ends with dash, skip
+                ;;
+            *)
+                # Create symlink with trailing dash if it doesn't exist
+                if [ ! -e "${dir}-" ]; then
+                    ln -s "$dir" "${dir}-"
+                fi
+                ;;
+        esac
+    fi
+done
+
+echo "done"
+`
+
+	cmd := sprite.CommandContext(fixCtx, "/bin/bash", "-c", script)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	return cmd.Run()
+}
+
+// cleanupStaleVSCodeState removes stale VS Code workspace locks and duplicate workspace folders
+// This prevents VS Code from creating new workspace folders on reconnect, which causes
+// extensions like Claude Code to lose their session state
+func cleanupStaleVSCodeState(ctx context.Context, sprite *sprites.Sprite) error {
+	if sprite == nil {
+		return fmt.Errorf("sprite is nil")
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// Clean up stale workspace state:
+	// 1. Remove all lock files (they'll be recreated by VS Code)
+	// 2. Remove duplicate workspace folders (ones with -1, -2, etc. suffixes)
+	//    keeping only the original to preserve extension state
+	script := `
+set -e
+WORKSPACE_DIR="$HOME/.vscode-server/data/User/workspaceStorage"
+
+if [ ! -d "$WORKSPACE_DIR" ]; then
+    exit 0
+fi
+
+# Remove all workspace lock files - VS Code will recreate them
+find "$WORKSPACE_DIR" -name "*.lock" -type f -delete 2>/dev/null || true
+
+# Find and remove duplicate workspace folders (those with -N suffix)
+# This keeps the original folder which has the extension state
+for dir in "$WORKSPACE_DIR"/*-[0-9]; do
+    if [ -d "$dir" ]; then
+        rm -rf "$dir"
+    fi
+done
+for dir in "$WORKSPACE_DIR"/*-[0-9][0-9]; do
+    if [ -d "$dir" ]; then
+        rm -rf "$dir"
+    fi
+done
+
+echo "cleanup complete"
+`
+
+	cmd := sprite.CommandContext(cleanupCtx, "/bin/bash", "-c", script)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	return cmd.Run()
 }
 
 // isClaudeCodeInstalledOnRemote checks if Claude Code extension is installed on the sprite

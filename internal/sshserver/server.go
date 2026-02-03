@@ -51,6 +51,11 @@ var (
 	keepaliveTimeout  = 20 * time.Second // Wait 20 seconds for response (allows for restore delays)
 )
 
+// Sprite keepalive settings - keep sprites awake while connections are active
+var (
+	spriteKeepaliveInterval = 30 * time.Second // Send activity to sprite every 30 seconds
+)
+
 // Bech32 alphabet for session IDs
 var bech32Encoding = base32.NewEncoding("qpzry9x8gf2tvdw0s3jn54khce6mua7l").
 	WithPadding(base32.NoPadding)
@@ -120,6 +125,22 @@ func (srv *Server) publicKeyCallback(cm ssh.ConnMetadata, _ ssh.PublicKey) (*ssh
 	sprite, err := srv.client.GetSprite(ctx, cm.User())
 	if err != nil {
 		return nil, fmt.Errorf("sprite not found: %s", cm.User())
+	}
+
+	// Wake up the sprite before accepting the connection
+	// This ensures the sprite is fully responsive before VS Code tries to start its server
+	// Without this, reconnections after sleep can fail with "Failed to parse remote port"
+	wakeCtx, wakeCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer wakeCancel()
+
+	cmd := sprite.CommandContext(wakeCtx, "true")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		slog.WarnContext(ctx, "Failed to wake sprite during auth",
+			"sprite", cm.User(),
+			"exception", err)
+		// Continue anyway - the sprite might still work
 	}
 
 	// Store sprite for later lookup
@@ -273,6 +294,10 @@ func (srv *Server) handleConn(ctx context.Context, tcpConn net.Conn, maxSpriteRe
 	// Start keepalive goroutine to detect dead connections
 	go c.keepalive(connCtx, connCancel)
 
+	// Start sprite keepalive to prevent the sprite from sleeping
+	// This sends periodic activity to the sprite so it doesn't think it's idle
+	go spriteKeepalive(connCtx, sprite)
+
 	for {
 		select {
 		case <-connCtx.Done():
@@ -335,6 +360,33 @@ func (c *sshConn) keepalive(ctx context.Context, cancel context.CancelFunc) {
 			case <-ctx.Done():
 				return
 			}
+		}
+	}
+}
+
+// spriteKeepalive sends periodic activity to the sprite to prevent it from sleeping
+// Sprites detect inactivity via stdio - this ensures there's always some output
+func spriteKeepalive(ctx context.Context, sprite *sprites.Sprite) {
+	ticker := time.NewTicker(spriteKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Run a command that generates stdio output to keep the sprite awake
+			// 'echo' writes to stdout which the sprite's activity detector should see
+			cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			cmd := sprite.CommandContext(cmdCtx, "echo", "keepalive")
+			cmd.Stdout = io.Discard
+			cmd.Stderr = io.Discard
+			if err := cmd.Run(); err != nil {
+				// Don't log errors - the connection might be closing
+				// The SSH keepalive will detect actual connection issues
+				slog.Debug("Sprite keepalive failed", "exception", err)
+			}
+			cancel()
 		}
 	}
 }

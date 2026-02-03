@@ -38,15 +38,17 @@ var (
 )
 
 // Retry settings for sprite connection recovery
+// These are tuned to handle checkpoint restores which can take 30-60 seconds
 var (
-	initialRetryDelay  = 500 * time.Millisecond // Start with 500ms delay
-	maxBackoffDuration = 5 * time.Second        // Cap backoff at 5 seconds
+	initialRetryDelay  = 1 * time.Second  // Start with 1s delay
+	maxBackoffDuration = 10 * time.Second // Cap backoff at 10 seconds
+	maxShellRetries    = 30               // Allow up to 30 retries for shells (~3-5 minutes)
 )
 
-// SSH keepalive settings - frequent checks for faster recovery after network loss
+// SSH keepalive settings - balanced for connection detection vs restore tolerance
 var (
-	keepaliveInterval = 15 * time.Second // Send keepalive every 15 seconds
-	keepaliveTimeout  = 10 * time.Second // Wait 10 seconds for response
+	keepaliveInterval = 30 * time.Second // Send keepalive every 30 seconds
+	keepaliveTimeout  = 20 * time.Second // Wait 20 seconds for response (allows for restore delays)
 )
 
 // Sprite keepalive settings - keep sprites awake while connections are active
@@ -753,8 +755,9 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 	}
 
 	// For interactive shells, allow more reconnection attempts
+	// This handles checkpoint restores which can take 30-60 seconds
 	if isShell {
-		maxRetries = max(maxRetries, 10)
+		maxRetries = max(maxRetries, maxShellRetries)
 	}
 
 	go func() {
@@ -775,7 +778,13 @@ func (s *session) exec(ctx context.Context, command string, isShell bool, maxRet
 
 				// Notify user that we're reconnecting (for interactive shells with TTY)
 				if isShell && s.tty {
-					msg := fmt.Sprintf("\r\n\033[33m[sprite] Connection lost, reconnecting (attempt %d/%d)...\033[0m\r\n", attempt+1, maxRetries)
+					var msg string
+					if attempt < 5 {
+						msg = fmt.Sprintf("\r\n\033[33m[sprite] Connection lost, reconnecting (attempt %d/%d)...\033[0m\r\n", attempt+1, maxRetries)
+					} else {
+						// After several attempts, mention this might be a checkpoint restore
+						msg = fmt.Sprintf("\r\n\033[33m[sprite] Reconnecting (attempt %d/%d)... If restoring a checkpoint, please wait.\033[0m\r\n", attempt+1, maxRetries)
+					}
 					s.ch.Write([]byte(msg))
 				}
 
@@ -815,6 +824,11 @@ func shouldRetry(err error) bool {
 		"i/o timeout",
 		"broken pipe",
 		"websocket: close",
+		"eof",
+		"context deadline exceeded",
+		"temporary failure",
+		"service unavailable",
+		"bad gateway",
 	}
 	errLower := strings.ToLower(err.Error())
 	for _, msg := range transientMessages {

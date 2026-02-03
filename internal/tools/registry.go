@@ -107,7 +107,7 @@ func Bootstrap(ctx context.Context, tool Tool, opts SetupOptions) error {
 	// Ensure serve is running
 	if !IsServeRunning() {
 		fmt.Printf("%s⏳%s Starting SSH server...\n", ColorYellow, ColorReset)
-		if err := StartServe(opts.LocalPort); err != nil {
+		if err := StartServe(opts.LocalPort, opts.OrgName); err != nil {
 			return fmt.Errorf("failed to start SSH server: %w", err)
 		}
 		fmt.Printf("%s✓%s SSH server listening on port %d\n", ColorGreen, ColorReset, opts.LocalPort)
@@ -195,7 +195,7 @@ func isPortAvailable(port int) bool {
 }
 
 // StartServe starts the serve command in the background
-func StartServe(port int) error {
+func StartServe(port int, orgName string) error {
 	// Check if port is available
 	if !isPortAvailable(port) {
 		return fmt.Errorf("port %d is already in use by another service\nTry a different port with -p flag, e.g.: sprite-bootstrap zed -s mysprite -p 2223", port)
@@ -211,7 +211,11 @@ func StartServe(port int) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	cmd := exec.Command(executable, "serve", "-l", fmt.Sprintf(":%d", port))
+	args := []string{"serve", "-l", fmt.Sprintf(":%d", port)}
+	if orgName != "" {
+		args = append(args, "-o", orgName)
+	}
+	cmd := exec.Command(executable, args...)
 	// Inherit stdin so sprites-go SDK can detect TTY for proper PTY handling
 	// Without this, Zed's terminal has input echo issues
 	cmd.Stdin = os.Stdin
